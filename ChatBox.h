@@ -525,6 +525,16 @@ class cChatBox
     }
 
 public:
+    void prepareCommand(const char* command)
+    {
+        _draft = string(command) + " ";
+        _cursor = _draft.size();
+        _inputViewStart = 0;
+        _active = true;
+        _selecting = false;
+        _selection.clear();
+    }
+
     cChatBox() : _active(false), _cursor(0), _inputViewStart(0), _scrollOffset(0)
     {
     }

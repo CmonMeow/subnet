@@ -1,6 +1,7 @@
 
 
 #include "RunClient.h"
+#include "ChatCommands.h"
 #include "sysdef.h"
 #include <string.h>
 #include <windows.h>
@@ -15,6 +16,44 @@ LRESULT CALLBACK ChatWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
 {
     switch (message)
     {
+    case WM_NCLBUTTONDBLCLK:
+        if (wParam == HTSYSMENU) return 0;
+        return DefWindowProcA(hwnd, message, wParam, lParam);
+    case WM_SYSCOMMAND:
+        // The native system-menu tracking loop turns a second icon click into
+        // SC_CLOSE without delivering WM_NCLBUTTONDBLCLK to this window.
+        if ((wParam & 0xfff0) == SC_MOUSEMENU && (wParam & 0x000f) == HTSYSMENU)
+        {
+            RECT titleBar = {};
+            TITLEBARINFO info = {};
+            info.cbSize = sizeof(info);
+            if (GetTitleBarInfo(hwnd, &info)) titleBar = info.rcTitleBar;
+            else GetWindowRect(hwnd, &titleBar);
+            const HMENU commands = reinterpret_cast<HMENU>(GetPropA(hwnd, "ChatCommandsMenu"));
+            if (!commands) return 0;
+            const UINT selected = TrackPopupMenuEx(commands,
+                TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+                titleBar.left, titleBar.bottom, hwnd, nullptr);
+            if (selected) PostMessageA(hwnd, WM_SYSCOMMAND, selected, 0);
+            return 0;
+        }
+        if ((wParam & 0xfff0) == SC_CLOSE && lParam != 0 &&
+            SendMessageA(hwnd, WM_NCHITTEST, 0, lParam) == HTSYSMENU)
+            return 0;
+        if (wParam >= CHAT_MENU_FIRST && wParam < CHAT_MENU_FIRST + sizeof(CHAT_COMMANDS)/sizeof(CHAT_COMMANDS[0]))
+        {
+            PostMessageA(hwnd, CHAT_MENU_COMMAND, wParam - CHAT_MENU_FIRST, 0);
+            return 0;
+        }
+        return DefWindowProcA(hwnd, message, wParam, lParam);
+    case WM_GETMINMAXINFO:
+        {
+            RECT minimum = {0, 0, CHAT_CLIENT_WIDTH, CHAT_CLIENT_HEIGHT};
+            AdjustWindowRectEx(&minimum, WS_OVERLAPPEDWINDOW, FALSE, 0);
+            auto* limits = reinterpret_cast<MINMAXINFO*>(lParam);
+            limits->ptMinTrackSize = {minimum.right-minimum.left, minimum.bottom-minimum.top};
+        }
+        return 0;
     case WM_CLOSE:
     case WM_DESTROY:
         App.quit = true;
@@ -71,7 +110,7 @@ LRESULT CALLBACK ChatWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         input.AddMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam));
         return 0;
     case WM_SIZE:
-        App.size = vec2i(LOWORD(lParam), HIWORD(lParam));
+        if (wParam != SIZE_MINIMIZED) App.size = vec2i(LOWORD(lParam), HIWORD(lParam));
         return 0;
     default:
         return DefWindowProcA(hwnd, message, wParam, lParam);
@@ -106,12 +145,12 @@ int main()
     }
 
     RECT rect = { 0, 0, CHAT_CLIENT_WIDTH, CHAT_CLIENT_HEIGHT };
-    AdjustWindowRectEx(&rect, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE, 0);
+    AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
     HWND hwnd = CreateWindowExA(
         0,
         wc.lpszClassName,
         "Disconnected",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         rect.right - rect.left,

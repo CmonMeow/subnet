@@ -76,11 +76,6 @@
   <Target Name="SignPrivateRelease" AfterTargets="Build" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Exec Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(ProjectDir)SignRelease.ps1&quot; -Executable &quot;$(TargetPath)&quot;" />
   </Target>
-  <Target Name="CopyVoiceProcessingLicense" AfterTargets="Build">
-    <Copy SourceFiles="$(ProjectDir)third_party\webview2\LICENSE.txt" DestinationFiles="$(OutDir)webview2-LICENSE.txt" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(ProjectDir)third_party\webview2\NOTICE.txt" DestinationFiles="$(OutDir)webview2-NOTICE.txt" SkipUnchangedFiles="true" />
-
-  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
   <ItemGroup>

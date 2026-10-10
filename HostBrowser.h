@@ -2,7 +2,7 @@
 #include "HostDirectoryClient.h"
 
 class HostBrowser {
-    bool visible=true,wasConnected=false,haveEntries=false;
+    bool wasConnected=false,haveEntries=false;
     unsigned long long entriesRevision=0;
     std::vector<HostDirectory::Entry> displayedEntries;
     unsigned displayedPage=0,displayedPages=1;
@@ -11,24 +11,20 @@ class HostBrowser {
         return input.mouse.x>=x&&input.mouse.x<x+width&&mouseY>=y&&mouseY<y+height;
     }
 public:
-    void hide(){visible=false;displayedEntries.clear();haveEntries=false;}
-    void toggle(HostDirectoryClient& directory){displayedEntries.clear();haveEntries=false;visible=!visible;if(visible)directory.refresh();}
-    void show(HostDirectoryClient& directory){displayedEntries.clear();haveEntries=false;visible=true;directory.refresh();}
-    bool shown(const cNetworkRuntime& network) const {return visible&&!network.hasConnection();}
+    void show(HostDirectoryClient& directory){displayedEntries.clear();haveEntries=false;directory.refresh();}
+    bool shown(const cNetworkRuntime& network) const {return !network.isHost()&&!network.clientReady();}
     void update(cNetworkRuntime& network,HostDirectoryClient& directory) {
-        bool connected=network.hasConnection();if(wasConnected&&!connected)hide();wasConnected=connected;
+        bool connected=network.hasConnection();if(wasConnected&&!connected)show(directory);wasConnected=connected;
         if(!shown(network)||!input.leftClick())return;
         const int top=App.size.y-34;
         for(size_t i=0;i<displayedEntries.size();++i)if(hit(20,top-64-(int)i*18,App.size.x-40,18)){
             std::string address=HostDirectory::addressText(displayedEntries[i]);input.KeyUp(VK_LBUTTON);
-            network.connectTo(address);hide();return;
+            if(!network.hasConnection())network.connectTo(address);return;
         }
         if(hit(20,48,128,22))directory.refresh(displayedPage);
         else if(hit(156,48,128,22)&&displayedPage>0)directory.refresh(displayedPage-1);
-        else if(hit(292,48,128,22)){
-            if(displayedPage+1<displayedPages)directory.refresh(displayedPage+1);
-            else if(network.hostOnPort())hide();
-        }
+        else if(hit(displayedPage>0?292:156,48,128,22)&&displayedPage+1<displayedPages)
+            directory.refresh(displayedPage+1);
         if(hit(12,44,App.size.x-24,top-44))input.KeyUp(VK_LBUTTON);
     }
     void draw(const cNetworkRuntime& network,const HostDirectoryClient& directory) {
@@ -51,7 +47,7 @@ public:
             QueueChatText(label.c_str(),24,(float)y+2,.4f,.9f,.68f);
         }
         DrawChatButton("REFRESH",vec2i(20,48),false);
-        DrawChatButton(displayedPage?"PREVIOUS":"--",vec2i(156,48),false);
-        DrawChatButton(displayedPage+1<displayedPages?"NEXT":"HOST",vec2i(292,48),false);
+        if(displayedPage>0)DrawChatButton("PREVIOUS",vec2i(156,48),false);
+        if(displayedPage+1<displayedPages)DrawChatButton("NEXT",vec2i(displayedPage>0?292:156,48),false);
     }
 };

@@ -1,4 +1,5 @@
 #include <winsock2.h>
+#include "RunClient.h"
 #include "sysdef.h"
 #include "NetworkProtocol.h"
 #include <map>
@@ -205,12 +206,35 @@ void RunChatClient(HWND hWnd)
     constexpr double frameIntervalMS = 1000.0 / 60.0;
     bool selectingHotkey = false;
     unsigned char releaseHotkey = 0;
+    HMENU commandMenu = CreatePopupMenu();
+    if (commandMenu) SetPropA(hWnd, "ChatCommandsMenu", commandMenu);
+    int menuHostState = -1;
 
     while (!App.quit)
     {
+        if (commandMenu && menuHostState != (int)network.isHost()) {
+            menuHostState = (int)network.isHost();
+            while (GetMenuItemCount(commandMenu) > 0) DeleteMenu(commandMenu, 0, MF_BYPOSITION);
+            for (size_t i = 0; i < sizeof(CHAT_COMMANDS)/sizeof(CHAT_COMMANDS[0]); ++i)
+                if (!CHAT_COMMANDS[i].hostOnly || menuHostState)
+                    AppendMenuA(commandMenu, MF_STRING, CHAT_MENU_FIRST + i, CHAT_COMMANDS[i].help);
+        }
         MSG msg;
         while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE))
         {
+            if (msg.hwnd == hWnd && msg.message == CHAT_MENU_COMMAND) {
+                if (msg.wParam < sizeof(CHAT_COMMANDS)/sizeof(CHAT_COMMANDS[0])) {
+                    const auto& command = CHAT_COMMANDS[msg.wParam];
+                    if (!command.hostOnly || network.isHost()) {
+                        selectingHotkey = false;
+                        releaseHotkey = 0;
+                        input.Clear();
+                        chatBox.prepareCommand(command.name);
+                        SetFocus(hWnd);
+                    }
+                }
+                continue;
+            }
             if (msg.hwnd == hWnd && msg.message == WM_DROPFILES)
             {
                 HDROP drop = reinterpret_cast<HDROP>(msg.wParam);
@@ -312,7 +336,7 @@ void RunChatClient(HWND hWnd)
             selectingHotkey=false;releaseHotkey=0;input.Clear();
             if(screenShare.watching()) screenShare.stopWatching();
             else if(network.isHost() || network.clientReady()) screenShare.toggle();
-            else {chatBox.deactivate();browser.toggle(directory);}
+            else if(!network.hasConnection()) {chatBox.deactivate();network.hostOnPort();}
         }
         if (micClicked && !settings.voiceEnabled()) settings.toggleVoiceEnabled();
         if (hotkeyClicked)
@@ -323,7 +347,6 @@ void RunChatClient(HWND hWnd)
         }
         const bool volumeInput=userVolumes.update(network,voiceChat,GetForegroundWindow()==hWnd);
         if (!selectingHotkey && !releaseHotkey && !volumeInput) chatBox.update(network);
-        if(chatBox.active())browser.hide();
         input.ConsumeMouseWheel();
         const bool talkDown = !selectingHotkey && !releaseHotkey &&
             (screenShare.focused() ? (GetAsyncKeyState(settings.talkKey)&0x8000)!=0 :
@@ -348,7 +371,7 @@ void RunChatClient(HWND hWnd)
             DrawChatButton(voiceChat.micEnabled() ? "MIC ON" : "MIC OFF",
                                         micButton, voiceChat.micEnabled(), voiceChat.transmitting(network));
             DrawChatButton(selectingHotkey ? "PRESS KEY" : settings.talkKeyLabel().c_str(), hotkeyButton, selectingHotkey);
-            DrawChatButton(!network.hasConnection() ? "HOSTS" : screenShare.watching() ? "STOP WATCH" : screenShare.sharing() ? "STOP SHARE" : "SCREEN",screenButton,screenShare.sharing());
+            DrawChatButton(!network.hasConnection() ? "HOST" : screenShare.watching() ? "STOP WATCH" : screenShare.sharing() ? "STOP SHARE" : "SCREEN",screenButton,screenShare.sharing());
             userVolumes.draw(voiceChat);
             SwapBuffers(dc);
         }
@@ -359,6 +382,8 @@ void RunChatClient(HWND hWnd)
     }
 
     screenShare.close();
+    RemovePropA(hWnd, "ChatCommandsMenu");
+    if(commandMenu) DestroyMenu(commandMenu);
     network.openScreen={};
     DragAcceptFiles(hWnd,FALSE);
     ReleaseDC(hWnd, dc);
