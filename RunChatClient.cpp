@@ -178,6 +178,16 @@ static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volume
     }
 }
 
+struct MessageChimeCooldown {
+    bool focused = true;
+    ULONGLONG nextChime = 0;
+    void focusChanged(bool active) {
+        if(focused != active) { focused = active; nextChime = 0; }
+    }
+    bool ready(ULONGLONG now) const { return !focused && now >= nextChime; }
+    void played(ULONGLONG now) { nextChime = now + 10 * 60 * 1000; }
+};
+
 void RunChatClient(HWND hWnd)
 {
     HDC dc = GetDC(hWnd);
@@ -194,10 +204,17 @@ void RunChatClient(HWND hWnd)
         else {chatBox.deactivate();browser.show(directory);}
     };
     cVoiceChat voiceChat;
-    network.messageReceived = [&] {
+    MessageChimeCooldown chimeCooldown;
+    auto updateChimeFocus = [&] {
         DWORD foregroundProcess = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
-        if(settings.voiceEnabled() && foregroundProcess != GetCurrentProcessId()) voiceChat.messageChime();
+        chimeCooldown.focusChanged(foregroundProcess == GetCurrentProcessId());
+    };
+    network.messageReceived = [&] {
+        updateChimeFocus();
+        const auto now = GetTickCount64();
+        if(settings.voiceEnabled() && chimeCooldown.ready(now) && voiceChat.messageChime())
+            chimeCooldown.played(now);
     };
     ParticipantVolume userVolumes;
     ScreenShare screenShare(hWnd,
@@ -220,6 +237,7 @@ void RunChatClient(HWND hWnd)
     auto tick = [&](bool modal) {
         if(ticking || App.quit) return;
         ticking = true;
+        updateChimeFocus();
         network.update();
         directory.update(network.isHost(),network.hostingPort(),(unsigned)network.participants().size(),settings.hostName);
         if(!modal) browser.update(network,directory);

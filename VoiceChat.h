@@ -37,7 +37,6 @@ class cVoiceChat
     bool _captureFailed = false;
     bool _playbackReady;
     unsigned _chimeSample = 5120;
-    ULONGLONG _lastChime = 0;
     unsigned __int32 _sequence;
 
     // All application capture state and codec access stays on the UI thread.
@@ -181,12 +180,10 @@ class cVoiceChat
     }
 
 public:
-    void messageChime() {
-        const auto now = GetTickCount64();
-        if(_playbackReady && (!_lastChime || now - _lastChime >= 2000)) {
-            _lastChime = now;
-            _chimeSample = 0;
-        }
+    bool messageChime() {
+        if(!_playbackReady) return false;
+        _chimeSample = 0;
+        return true;
     }
 
     cVoiceChat()
