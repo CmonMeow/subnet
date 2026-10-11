@@ -34,7 +34,7 @@ public:
             entriesRevision=directory.entriesRevision;haveEntries=true;
         }
         const int top=App.size.y-34;
-        QueueChatRect(12,44,(float)App.size.x-12,(float)top,.015f,.035f,.03f,1,false);
+        QueueChatRect(12,44,(float)App.size.x-12,(float)top,.015f,.035f,.03f,.50f,false);
         QueueChatRect(12,44,(float)App.size.x-12,(float)top,.3f,.45f,.4f,1,true);
         std::string title="Hosts  "+std::to_string(displayedPage+1)+"/"+std::to_string(displayedPages);
         QueueChatText(title.c_str(),24,(float)top-19,.5f,.9f,.75f);

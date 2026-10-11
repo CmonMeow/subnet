@@ -10,6 +10,7 @@
 #include <conio.h>
 #include "NetworkRuntime.h"
 #include "font.h"
+#include "ChatBackground.h"
 static void QueueChatRect(float minX,float minY,float maxX,float maxY,float r,float g,float b,float a,bool outline)
 {
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
@@ -28,7 +29,7 @@ static bool ChatButtonHovered(vec2i pos)
 static void DrawChatButton(const char* text, vec2i pos, bool on, bool speaking = false)
 {
     QueueChatRect((float)pos.x, (float)pos.y, (float)pos.x + 128.f, (float)pos.y + 22.f,
-                  on ? 0.f : .02f, on ? .26f : .02f, on ? .23f : .02f, .92f, false);
+                  on ? 0.f : .02f, on ? .26f : .02f, on ? .23f : .02f, .50f, false);
     const float border = speaking ? 1.f : ChatButtonHovered(pos) ? .8f : .35f;
     QueueChatRect((float)pos.x, (float)pos.y, (float)pos.x + 128.f, (float)pos.y + 22.f,
                   speaking ? .3f : border, border, speaking ? .8f : border, .95f, true);
@@ -143,7 +144,7 @@ static ChatStatusView MakeChatStatus(const cNetworkRuntime& network, const cVoic
     return view;
 }
 
-static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volumes, size_t historyOffset = 0)
+static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volumes, size_t historyOffset = 0, bool showPeople = true)
 {
     volumes.beginRows();
     const string history = historyOffset ? " | history +" + std::to_string(historyOffset) : "";
@@ -152,6 +153,7 @@ static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volume
         view.online ? .50f : .65f, view.online ? .88f : .70f, view.online ? .74f : .67f);
     if (!history.empty())
         QueueChatText(history.c_str(), 20.f + ChatTextWidth(status), (float)App.size.y - 23.f, .90f, .77f, .46f);
+    if (!showPeople) return;
     float x = 20.f, y = (float)App.size.y - 53.f;
     if (view.people.empty())
     {
@@ -191,6 +193,7 @@ struct MessageChimeCooldown {
 void RunChatClient(HWND hWnd)
 {
     HDC dc = GetDC(hWnd);
+    ChatBackground background;
     DragAcceptFiles(hWnd,TRUE);
     PackedClientSettings settings;
     cNetworkRuntime network(hWnd, &settings);
@@ -328,8 +331,9 @@ void RunChatClient(HWND hWnd)
             glDisable(GL_DEPTH_TEST);
             glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, App.size.x, 0, App.size.y, -1, 1);
             glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-            chatBox.draw(network, GetForegroundWindow() == hWnd);
-            DrawChatStatus(MakeChatStatus(network, voiceChat), userVolumes, chatBox.historyOffset());
+            background.draw(App.size.x, App.size.y);
+            chatBox.draw(network, GetForegroundWindow() == hWnd, !browser.shown(network));
+            DrawChatStatus(MakeChatStatus(network, voiceChat), userVolumes, chatBox.historyOffset(), !browser.shown(network));
             browser.draw(network,directory);
             DrawChatButton(voiceChat.micEnabled() ? "MIC ON" : "MIC OFF",
                                         micButton, voiceChat.micEnabled(), voiceChat.transmitting(network));

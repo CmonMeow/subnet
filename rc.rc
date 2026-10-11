@@ -10,6 +10,7 @@ IDC_POINTER_RED    CURSOR "cursor_red.cur"
 IDC_POINTER_YELLOW CURSOR "cursor_yellow.cur"
 
 200 RCDATA "ScreenShare.html"
+IDR_CHAT_BACKGROUND RCDATA "ChatBackground.bits"
 
 // Increment both numeric and display versions for each distributed release.
 1 VERSIONINFO

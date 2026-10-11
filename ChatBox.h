@@ -721,7 +721,7 @@ public:
         }
     }
 
-    void draw(const cNetworkRuntime& network, bool windowFocused = true)
+    void draw(const cNetworkRuntime& network, bool windowFocused = true, bool showHistory = true)
     {
         clampScroll(network);
         const float x = BOX_X;
@@ -734,13 +734,14 @@ public:
         const float historyHeight = (float)(rows * (size_t)lineHeight);
         const float height = historyHeight + inputHeight + 18.f;
 
-        QueueChatRect(x, y, x + width, y + height, .02f, .025f, .025f, .70f, false);
-        QueueChatRect(x, y, x + width, y + height, .32f, .38f, .36f, .95f, true);
+        const float panelTop = showHistory ? y + height : 44.f;
+        QueueChatRect(x, y, x + width, panelTop, .02f, .025f, .025f, .50f, false);
+        QueueChatRect(x, y, x + width, panelTop, .32f, .38f, .36f, .95f, true);
 
         const size_t newestExclusive = lines.size() > _scrollOffset ? lines.size() - _scrollOffset : 0;
         const size_t first = newestExclusive > rows ? newestExclusive - rows : 0;
         float textY = y + height - 22.f;
-        for (size_t i = first; i < newestExclusive; ++i)
+        for (size_t i = first; showHistory && i < newestExclusive; ++i)
         {
             drawSelection(network,lines[i],textY-(float)(i-first)*lineHeight);
             float r = .96f;
@@ -790,7 +791,6 @@ public:
             cursorInView = draft.size();
         }
         string inputLine = "> " + draft;
-        QueueChatRect(x + 6.f, y + 6.f, x + width - 6.f, y + inputHeight + 4.f, .045f, .065f, .06f, .92f, false);
         if (_active && windowFocused)
             QueueChatRect(x + 6.f, y + 6.f, x + width - 6.f, y + inputHeight + 4.f, .18f, .65f, .57f, 1.f, true);
         QueueChatText(inputLine.c_str(), x + 10.f, y + 12.f, .90f, .94f, .92f);
@@ -801,7 +801,7 @@ public:
             float caretX = x + 10.f + ChatTextWidth("> " + draft.substr(0, cursorInView));
             QueueChatRect(caretX, y + 12.f, caretX + 1.f, y + 26.f, .70f, 1.f, .9f, 1.f, false);
         }
-        drawTimestamp(network,windowFocused);
+        if (showHistory) drawTimestamp(network,windowFocused);
 
 
     }

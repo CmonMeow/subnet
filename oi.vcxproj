@@ -144,6 +144,8 @@
     <ResourceCompile Include="rc.rc" />
     <ClInclude Include="resource.h" />
     <Image Include="Icon.ico" />
+    <ClInclude Include="ChatBackground.h" />
+    <None Include="ChatBackground.bits" />
     <None Include="cursor_white.cur" />
     <None Include="cursor_cyan.cur" />
     <None Include="cursor_green.cur" />
