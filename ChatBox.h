@@ -423,11 +423,6 @@ class cChatBox
 
         switch (cmd)
         {
-        case ChatCommand::Help:
-            network.showHelp();
-            network.showNotice("Scroll chat to read help.");
-            break;
-
         case ChatCommand::Name:
             network.changeName(command.substr(5));
             break;
@@ -560,7 +555,7 @@ public:
     void update(cNetworkRuntime& network)
     {
         const auto& current=network.chatLines();
-        if(_selection.anchor.first&&_historyTail&&!current.empty()&&current.back().historyId!=_historyTail)
+        if((_scrollOffset || _selection.selected() || (_selecting && _selectionMoved))&&_historyTail&&!current.empty()&&current.back().historyId!=_historyTail)
             for(size_t i=0;i<current.size();++i)if(current[i].historyId==_historyTail){_scrollOffset+=current.size()-i-1;break;}
         _historyTail=current.empty()?0:current.back().historyId;
         clampScroll(network);
@@ -609,6 +604,7 @@ public:
                 _selecting=false;
                 ChatSelection::Point released;
                 if(!_selectionMoved&&historyPoint(network,released)&&released==_selection.anchor)openLinkUnderMouse(network);
+                if(!_selectionMoved)_selection.clear();
             }
             input.KeyUp(VK_LBUTTON);DrainTextInput();return;
         }

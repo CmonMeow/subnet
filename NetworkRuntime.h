@@ -538,6 +538,7 @@ class cNetworkRuntime
             if (decryptPrivateText(privateCipher, privateText))
             {
                 addChatLine(string("(private) ") + privateName + ": " + privateText, CLKPrivate);
+                if(privateFrom != localPlayerId() && messageReceived) messageReceived();
             }
             return;
         }
@@ -567,6 +568,7 @@ class cNetworkRuntime
         if (ParseAppRawString(message, messageSize, NAMTChat, text, CHAT_MAX_LINE_CHARS))
         {
             addChatLine(SanitiseChatLine(text));
+            if(text.find(playerDisplayName(localPlayerId()) + ": ") != 0 && messageReceived) messageReceived();
             return;
         }
 
@@ -774,6 +776,8 @@ class cNetworkRuntime
         sendRawStringFromServerToAll(NAMTConnect, status.str(), CHAT_MAX_LINE_CHARS);
     }
 
+    string _statusNotice;
+    ULONGLONG _statusNoticeUntil = 0;
     void addChatLine(const string& line, ChatLineKind kind = CLKNormal)
     {
         if (line.empty())
@@ -782,6 +786,24 @@ class cNetworkRuntime
         }
         if (!_hWnd) printf("%s\n", SanitiseChatLine(line).c_str());
         string text = SanitiseChatLine(line);
+        if(kind == CLKError || (!isHost() && !clientReady() && kind == CLKSystem)) {
+            if(text != "connecting" && text != "disconnected" && text != "Hosting stopped.") {
+                _statusNotice = text;
+                if(text.find("unknown command:") == 0) _statusNotice = "Unknown command";
+                else if(text.find("Not connected.") == 0) _statusNotice = "Disconnected";
+                else if(text.find("usage:") == 0) {
+                    const size_t end = text.find(' ', 7);
+                    _statusNotice = "Check " + text.substr(7, end == string::npos ? end : end-7) + " syntax";
+                }
+                else if(text.find("Failed to join.") == 0) _statusNotice = "Connection failed";
+                else if(text.find("Cannot read the C:") == 0) _statusNotice = "Cannot read drive ID";
+                else if(text.find("Host name must") == 0) _statusNotice = "Invalid host name";
+                else if(text.find("Dedicated on:") == 0) _statusNotice = "Auto-host enabled";
+                else if(text.find("Dedicated off:") == 0) _statusNotice = "Auto-host disabled";
+                else if(text.find("No recipients are ready") == 0) _statusNotice = "No file recipients";
+                _statusNoticeUntil = GetTickCount64() + 6000;
+            }
+        }
         size_t offset = 0;
         while (offset < text.size())
         {
@@ -1032,6 +1054,7 @@ class cNetworkRuntime
         std::ostringstream line;
         line << playerDisplayName(from) << ": " << text;
         addChatLine(line.str());
+        if(from != localPlayerId() && messageReceived) messageReceived();
         sendRawStringFromServerToAll(NAMTChat, line.str(), CHAT_MAX_LINE_CHARS);
     }
 
@@ -1048,6 +1071,7 @@ class cNetworkRuntime
             if (decryptPrivateText(cipher, privateText))
             {
                 addChatLine(fromName + ": " + privateText, CLKPrivate);
+                if(from != localPlayerId() && messageReceived) messageReceived();
             }
             return;
         }
@@ -1236,7 +1260,7 @@ public:
     {
         sodium_init();
         ensurePrivateChatKey();
-        addChatLine("Type /help for commands.", CLKSystem);
+
     }
 
     ~cNetworkRuntime()
@@ -1436,6 +1460,8 @@ public:
 
     __int32 localPlayerId() const { return _server ? 0 : _localPlayerId; }
 
+    string statusNotice() const {return GetTickCount64() < _statusNoticeUntil ? _statusNotice : string();}
+    std::function<void()> messageReceived;
     void showNotice(const string& text, bool error = false) { addChatLine(text, error ? CLKError : CLKSystem); }
 
     bool clientReady() const { return !_disconnectDeadline && _client && _localPlayerId >= 0; }
@@ -1478,14 +1504,6 @@ public:
         }
         _settings->setDedicated(enable);
         showNotice(enable ? "Dedicated on: host automatically at startup." : "Dedicated off: automatic hosting disabled.");
-    }
-
-    void showHelp()
-    {
-        for (const auto& command : CHAT_COMMANDS)
-            if (!command.hostOnly || isHost()) addChatLine(command.help, CLKSystem);
-        addChatLine("Drop or paste files into chat; click a red offer to save.",CLKSystem);
-        addChatLine("Click an active transfer to cancel it.",CLKSystem);
     }
 
     string participantSessionKey(int player) const {auto it=_privateChatKeys.find(player);return it==_privateChatKeys.end()?string():it->second;}

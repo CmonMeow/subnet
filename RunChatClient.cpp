@@ -129,6 +129,7 @@ static ChatStatusView MakeChatStatus(const cNetworkRuntime& network, const cVoic
     view.online = network.isHost() || network.clientReady();
     view.connecting = network.hasConnection() && !view.online;
     view.status = view.connecting ? "Connecting..." : "Disconnected";
+    if(!view.online && !network.statusNotice().empty()) view.status = network.statusNotice();
     for (const auto& person : network.participants())
     {
         bool local = person.first == network.localPlayerId();
@@ -193,6 +194,11 @@ void RunChatClient(HWND hWnd)
         else {chatBox.deactivate();browser.show(directory);}
     };
     cVoiceChat voiceChat;
+    network.messageReceived = [&] {
+        DWORD foregroundProcess = 0;
+        GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
+        if(settings.voiceEnabled() && foregroundProcess != GetCurrentProcessId()) voiceChat.messageChime();
+    };
     ParticipantVolume userVolumes;
     ScreenShare screenShare(hWnd,
         [&](const ScreenSignaling::Event& event){ network.sendScreenEvent(event); },
@@ -209,6 +215,112 @@ void RunChatClient(HWND hWnd)
     HMENU commandMenu = CreatePopupMenu();
     if (commandMenu) SetPropA(hWnd, "ChatCommandsMenu", commandMenu);
     int menuHostState = -1;
+
+    bool ticking = false;
+    auto tick = [&](bool modal) {
+        if(ticking || App.quit) return;
+        ticking = true;
+        network.update();
+        directory.update(network.isHost(),network.hostingPort(),(unsigned)network.participants().size(),settings.hostName);
+        if(!modal) browser.update(network,directory);
+        if(directory.publishStatus!=previousPublishStatus){
+            previousPublishStatus=directory.publishStatus;
+            if(network.isHost()&&!previousPublishStatus.empty()&&previousPublishStatus!="Publishing host...")
+                network.showNotice(previousPublishStatus,previousPublishStatus!="Listed in host browser.");
+        }
+        if(!network.isHost() && !network.clientReady()) screenShare.close();
+        ScreenSignaling::Event screenEvent;
+        while(network.popScreenEvent(screenEvent)) screenShare.receive(screenEvent);
+        screenShare.update();
+        const unsigned __int64 now = GetTickCount64();
+        if (now - lastTitleUpdate >= 1000 || previousTitle.empty())
+        {
+            unsigned __int64 incoming = 0, outgoing = 0;
+            const bool connected = network.trafficTotals(incoming, outgoing);
+            char title[192];
+            if (connected)
+            {
+                const double seconds = (now - lastTitleUpdate) / 1000.0;
+                const bool validSample = hadTrafficSample && seconds > 0 &&
+                    incoming >= previousIncoming && outgoing >= previousOutgoing;
+                const double inputRate = validSample ? (incoming - previousIncoming) * 8.0 / seconds / 1000000.0 : 0;
+                const double outputRate = validSample ? (outgoing - previousOutgoing) * 8.0 / seconds / 1000000.0 : 0;
+                if (network.isHost())
+                    snprintf(title, sizeof(title), "Hosting | Avg ping: %d ms | In: %.3f Mbps | Out: %.3f Mbps",
+                             network.latencyMS(), inputRate, outputRate);
+                else if (network.clientReady())
+                    snprintf(title, sizeof(title), "Ping: %d ms | In: %.3f Mbps | Out: %.3f Mbps",
+                             network.latencyMS(), inputRate, outputRate);
+                else
+                    snprintf(title, sizeof(title), "Connecting | In: %.3f Mbps | Out: %.3f Mbps", inputRate, outputRate);
+            }
+            else
+                snprintf(title, sizeof(title), "Disconnected");
+            if (previousTitle != title)
+            {
+                SetWindowTextA(hWnd, title);
+                previousTitle = title;
+            }
+            hadTrafficSample = connected;
+            previousIncoming = incoming;
+            previousOutgoing = outgoing;
+            lastTitleUpdate = now;
+        }
+        const vec2i micButton(App.size.x - 140, App.size.y - 28);
+        const vec2i screenButton(App.size.x - 412, App.size.y - 28);
+        const vec2i hotkeyButton(App.size.x - 276, App.size.y - 28);
+        const bool micClicked = !modal && ChatButtonHovered(micButton) && input.leftClick();
+        const bool hotkeyClicked = !modal && ChatButtonHovered(hotkeyButton) && input.leftClick();
+        const bool screenClicked=!modal &&ChatButtonHovered(screenButton) && input.leftClick();
+        if (micClicked || hotkeyClicked || screenClicked) input.KeyUp(VK_LBUTTON);
+        if(screenClicked) {
+            selectingHotkey=false;releaseHotkey=0;input.Clear();
+            if(screenShare.watching()) screenShare.stopWatching();
+            else if(network.isHost() || network.clientReady()) screenShare.toggle();
+            else if(!network.hasConnection()) {chatBox.deactivate();network.hostOnPort();}
+        }
+        if (micClicked && !settings.voiceEnabled()) settings.toggleVoiceEnabled();
+        if (hotkeyClicked)
+        {
+            selectingHotkey = !selectingHotkey;
+            input.Clear();
+            voiceChat.resetTransmitMode();
+        }
+        const bool volumeInput=modal || userVolumes.update(network,voiceChat,GetForegroundWindow()==hWnd);
+        if (!selectingHotkey && !releaseHotkey && !volumeInput) chatBox.update(network);
+        input.ConsumeMouseWheel();
+        const bool talkDown = !modal && !selectingHotkey && !releaseHotkey &&
+            (screenShare.focused() ? (GetAsyncKeyState(settings.talkKey)&0x8000)!=0 :
+             input.pressed(settings.talkKey) && !chatBox.active());
+        if (talkDown && !settings.voiceEnabled()) settings.toggleVoiceEnabled();
+        voiceChat.update(network, talkDown, settings, micClicked);
+
+        // Audio and network run at least every 10 ms; drawing targets 60 Hz.
+        if (!IsIconic(hWnd) && now >= nextDraw)
+        {
+            nextDraw += frameIntervalMS;
+            if (nextDraw <= now) nextDraw = now + frameIntervalMS;
+            glViewport(0, 0, App.size.x, App.size.y);
+            glClearColor(0.f, 0.f, 0.f, 1.f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glDisable(GL_DEPTH_TEST);
+            glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, App.size.x, 0, App.size.y, -1, 1);
+            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            chatBox.draw(network, GetForegroundWindow() == hWnd);
+            DrawChatStatus(MakeChatStatus(network, voiceChat), userVolumes, chatBox.historyOffset());
+            browser.draw(network,directory);
+            DrawChatButton(voiceChat.micEnabled() ? "MIC ON" : "MIC OFF",
+                                        micButton, voiceChat.micEnabled(), voiceChat.transmitting(network));
+            DrawChatButton(selectingHotkey ? "PRESS KEY" : settings.talkKeyLabel().c_str(), hotkeyButton, selectingHotkey);
+            DrawChatButton(!network.hasConnection() ? "HOST" : screenShare.watching() ? "STOP WATCH" : screenShare.sharing() ? "STOP SHARE" : "SCREEN",screenButton,screenShare.sharing());
+            userVolumes.draw(voiceChat);
+            SwapBuffers(dc);
+        }
+
+        ticking = false;
+    };
+    std::function<void()> modalTick = [&]{ tick(true); };
+    SetPropA(hWnd, "ChatModalTick", &modalTick);
 
     while (!App.quit)
     {
@@ -279,111 +391,18 @@ void RunChatClient(HWND hWnd)
                 break;
         }
 
-        network.update();
-        directory.update(network.isHost(),network.hostingPort(),(unsigned)network.participants().size(),settings.hostName);
-        browser.update(network,directory);
-        if(directory.publishStatus!=previousPublishStatus){
-            previousPublishStatus=directory.publishStatus;
-            if(network.isHost()&&!previousPublishStatus.empty()&&previousPublishStatus!="Publishing host...")
-                network.showNotice(previousPublishStatus,previousPublishStatus!="Listed in host browser.");
-        }
-        if(!network.isHost() && !network.clientReady()) screenShare.close();
-        ScreenSignaling::Event screenEvent;
-        while(network.popScreenEvent(screenEvent)) screenShare.receive(screenEvent);
-        screenShare.update();
-        const unsigned __int64 now = GetTickCount64();
-        if (now - lastTitleUpdate >= 1000 || previousTitle.empty())
-        {
-            unsigned __int64 incoming = 0, outgoing = 0;
-            const bool connected = network.trafficTotals(incoming, outgoing);
-            char title[192];
-            if (connected)
-            {
-                const double seconds = (now - lastTitleUpdate) / 1000.0;
-                const bool validSample = hadTrafficSample && seconds > 0 &&
-                    incoming >= previousIncoming && outgoing >= previousOutgoing;
-                const double inputRate = validSample ? (incoming - previousIncoming) * 8.0 / seconds / 1000000.0 : 0;
-                const double outputRate = validSample ? (outgoing - previousOutgoing) * 8.0 / seconds / 1000000.0 : 0;
-                if (network.isHost())
-                    snprintf(title, sizeof(title), "Hosting | Avg ping: %d ms | In: %.3f Mbps | Out: %.3f Mbps",
-                             network.latencyMS(), inputRate, outputRate);
-                else if (network.clientReady())
-                    snprintf(title, sizeof(title), "Ping: %d ms | In: %.3f Mbps | Out: %.3f Mbps",
-                             network.latencyMS(), inputRate, outputRate);
-                else
-                    snprintf(title, sizeof(title), "Connecting | In: %.3f Mbps | Out: %.3f Mbps", inputRate, outputRate);
-            }
-            else
-                snprintf(title, sizeof(title), "Disconnected");
-            if (previousTitle != title)
-            {
-                SetWindowTextA(hWnd, title);
-                previousTitle = title;
-            }
-            hadTrafficSample = connected;
-            previousIncoming = incoming;
-            previousOutgoing = outgoing;
-            lastTitleUpdate = now;
-        }
-        const vec2i micButton(App.size.x - 140, App.size.y - 28);
-        const vec2i screenButton(App.size.x - 412, App.size.y - 28);
-        const vec2i hotkeyButton(App.size.x - 276, App.size.y - 28);
-        const bool micClicked = ChatButtonHovered(micButton) && input.leftClick();
-        const bool hotkeyClicked = ChatButtonHovered(hotkeyButton) && input.leftClick();
-        const bool screenClicked=ChatButtonHovered(screenButton) && input.leftClick();
-        if (micClicked || hotkeyClicked || screenClicked) input.KeyUp(VK_LBUTTON);
-        if(screenClicked) {
-            selectingHotkey=false;releaseHotkey=0;input.Clear();
-            if(screenShare.watching()) screenShare.stopWatching();
-            else if(network.isHost() || network.clientReady()) screenShare.toggle();
-            else if(!network.hasConnection()) {chatBox.deactivate();network.hostOnPort();}
-        }
-        if (micClicked && !settings.voiceEnabled()) settings.toggleVoiceEnabled();
-        if (hotkeyClicked)
-        {
-            selectingHotkey = !selectingHotkey;
-            input.Clear();
-            voiceChat.resetTransmitMode();
-        }
-        const bool volumeInput=userVolumes.update(network,voiceChat,GetForegroundWindow()==hWnd);
-        if (!selectingHotkey && !releaseHotkey && !volumeInput) chatBox.update(network);
-        input.ConsumeMouseWheel();
-        const bool talkDown = !selectingHotkey && !releaseHotkey &&
-            (screenShare.focused() ? (GetAsyncKeyState(settings.talkKey)&0x8000)!=0 :
-             input.pressed(settings.talkKey) && !chatBox.active());
-        if (talkDown && !settings.voiceEnabled()) settings.toggleVoiceEnabled();
-        voiceChat.update(network, talkDown, settings, micClicked);
-
-        // Audio and network run at least every 10 ms; drawing targets 60 Hz.
-        if (!IsIconic(hWnd) && now >= nextDraw)
-        {
-            nextDraw += frameIntervalMS;
-            if (nextDraw <= now) nextDraw = now + frameIntervalMS;
-            glViewport(0, 0, App.size.x, App.size.y);
-            glClearColor(0.f, 0.f, 0.f, 1.f);
-            glClear(GL_COLOR_BUFFER_BIT);
-            glDisable(GL_DEPTH_TEST);
-            glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, App.size.x, 0, App.size.y, -1, 1);
-            glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-            chatBox.draw(network, GetForegroundWindow() == hWnd);
-            DrawChatStatus(MakeChatStatus(network, voiceChat), userVolumes, chatBox.historyOffset());
-            browser.draw(network,directory);
-            DrawChatButton(voiceChat.micEnabled() ? "MIC ON" : "MIC OFF",
-                                        micButton, voiceChat.micEnabled(), voiceChat.transmitting(network));
-            DrawChatButton(selectingHotkey ? "PRESS KEY" : settings.talkKeyLabel().c_str(), hotkeyButton, selectingHotkey);
-            DrawChatButton(!network.hasConnection() ? "HOST" : screenShare.watching() ? "STOP WATCH" : screenShare.sharing() ? "STOP SHARE" : "SCREEN",screenButton,screenShare.sharing());
-            userVolumes.draw(voiceChat);
-            SwapBuffers(dc);
-        }
+        tick(false);
 
         // Wake for the next frame instead of rounding every frame up to 20 ms.
         const double waitMS = IsIconic(hWnd) ? 10.0 : nextDraw - GetTickCount64();
         Sleep(static_cast<DWORD>((std::max)(1.0, (std::min)(10.0, std::ceil(waitMS)))));
     }
 
+    RemovePropA(hWnd, "ChatModalTick");
     screenShare.close();
     RemovePropA(hWnd, "ChatCommandsMenu");
     if(commandMenu) DestroyMenu(commandMenu);
+    network.messageReceived={};
     network.openScreen={};
     DragAcceptFiles(hWnd,FALSE);
     ReleaseDC(hWnd, dc);

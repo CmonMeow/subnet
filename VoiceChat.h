@@ -5,6 +5,7 @@
 #include "VoiceProcessing.h"
 #include "VoiceCapture.h"
 #include <algorithm>
+#include <cmath>
 #include <deque>
 #include <vector>
 #include <windows.h>
@@ -35,6 +36,8 @@ class cVoiceChat
     unsigned __int64 _lastVoiceSent = 0;
     bool _captureFailed = false;
     bool _playbackReady;
+    unsigned _chimeSample = 5120;
+    ULONGLONG _lastChime = 0;
     unsigned __int32 _sequence;
 
     // All application capture state and codec access stays on the UI thread.
@@ -119,6 +122,16 @@ class cVoiceChat
         while (_playbackBuffers.size() < 4)
         {
             AudioFrame frame = _mixer.render(GetTickCount64());
+            for(auto& sample : frame) {
+                if(_chimeSample >= 5120) break;
+                const double t = _chimeSample++ / 16000.0;
+                const double noteTime = t < 0.175 ? t : t - 0.175;
+                if(noteTime >= 0.145) continue;
+                const double frequency = t < 0.175 ? 523.25 : 783.99;
+                const double envelope = sin(3.141592653589793 * noteTime / 0.145);
+                const int tone = (int)(1800 * envelope * envelope * sin(2 * 3.141592653589793 * frequency * noteTime));
+                sample = (__int16)(std::max)(-32768, (std::min)(32767, (int)sample + tone));
+            }
             if (!submitPlayback(frame)) break;
         }
     }
@@ -168,6 +181,14 @@ class cVoiceChat
     }
 
 public:
+    void messageChime() {
+        const auto now = GetTickCount64();
+        if(_playbackReady && (!_lastChime || now - _lastChime >= 2000)) {
+            _lastChime = now;
+            _chimeSample = 0;
+        }
+    }
+
     cVoiceChat()
         : _waveOut(NULL),
           _recording(false),
