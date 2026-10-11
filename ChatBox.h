@@ -343,7 +343,7 @@ class cChatBox
         }
     }
 
-    bool openLinkUnderMouse(cNetworkRuntime& network)
+    bool openLinkUnderMouse(cNetworkRuntime& network, bool activate = true)
     {
         const vector<NetworkChatLine>& lines = network.chatLines();
         const size_t rows = visibleRows();
@@ -361,7 +361,7 @@ class cChatBox
                 if (lines[i].kind == CLKScreen)
                 {
                     const string label=FitChatText(network.screenLabel(lines[i].fileSender,lines[i].fileId),(int)boxWidth()-24);
-                    if(mouseX < BOX_X+8.f+ChatTextWidth(label)) { network.clickScreen(lines[i].fileSender,lines[i].fileId); return true; }
+                    if(mouseX < BOX_X+8.f+ChatTextWidth(label)) { if(activate) network.clickScreen(lines[i].fileSender,lines[i].fileId); return true; }
                     continue;
                 }
                 if (lines[i].kind == CLKFile || lines[i].kind == CLKImage)
@@ -369,7 +369,7 @@ class cChatBox
                     const string label = FitChatText(network.fileLabel(lines[i].fileSender,lines[i].fileId),(int)boxWidth()-24);
                     if (mouseX < BOX_X + 8.f + ChatTextWidth(label))
                     {
-                        network.clickFile(lines[i].fileSender,lines[i].fileId);
+                        if(activate) network.clickFile(lines[i].fileSender,lines[i].fileId);
                         return true;
                     }
                     continue;
@@ -386,7 +386,7 @@ class cChatBox
                 string url;
                 if (UrlAtCharacter(lines[i].text, character, url))
                 {
-                    ShellExecuteA(NULL, "open", url.c_str(), NULL, NULL, SW_SHOWNORMAL);
+                    if(activate) ShellExecuteA(NULL, "open", url.c_str(), NULL, NULL, SW_SHOWNORMAL);
                     return true;
                 }
             }
@@ -525,6 +525,7 @@ class cChatBox
     }
 
 public:
+    bool linkHovered(cNetworkRuntime& network) { return openLinkUnderMouse(network,false); }
     void prepareCommand(const char* command)
     {
         _draft = string(command) + " ";

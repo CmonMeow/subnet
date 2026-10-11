@@ -178,7 +178,7 @@ int main()
     wc.lpfnWndProc = ChatWndProc;
     wc.hInstance = instance;
     wc.hIcon = LoadIconA(instance, MAKEINTRESOURCEA(IDI_CORE));
-    wc.hCursor = LoadCursorA(instance, MAKEINTRESOURCEA(IDC_POINTER_GREEN));
+    wc.hCursor = LoadCursorA(instance, MAKEINTRESOURCEA(IDC_POINTER_CYAN));
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     wc.lpszClassName = "oiWindow";
     wc.hIconSm = wc.hIcon;

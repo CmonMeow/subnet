@@ -43,7 +43,10 @@ public:
         for(size_t i=0;i<displayedEntries.size();++i){
             const auto& e=displayedEntries[i];int y=top-64-(int)i*18;
             std::string label=FitChatText(e.name,App.size.x-48);
-            if(hit(20,y,App.size.x-40,18))QueueChatRect(20,(float)y,(float)App.size.x-20,(float)y+18,.02f,.15f,.11f,1,false);
+            if(hit(20,y,App.size.x-40,18)){
+                QueueChatRect(20,(float)y,(float)App.size.x-20,(float)y+18,.02f,.15f,.11f,1,false);
+                ChatCursorResource=IDC_POINTER_YELLOW;
+            }
             QueueChatText(label.c_str(),24,(float)y+2,.4f,.9f,.68f);
         }
         DrawChatButton("REFRESH",vec2i(20,48),false);

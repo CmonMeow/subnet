@@ -102,6 +102,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="font.h" />
+    <ClInclude Include="FontGlyphs.h" />
     <ClInclude Include="maff.h" />
     <ClInclude Include="sysdef.h" />
     <ClInclude Include="ChatBox.h" />

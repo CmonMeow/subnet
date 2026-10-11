@@ -11,6 +11,8 @@
 #include "NetworkRuntime.h"
 #include "font.h"
 #include "ChatBackground.h"
+static int ChatCursorResource = IDC_POINTER_CYAN;
+
 static void QueueChatRect(float minX,float minY,float maxX,float maxY,float r,float g,float b,float a,bool outline)
 {
     glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
@@ -30,6 +32,7 @@ static void DrawChatButton(const char* text, vec2i pos, bool on, bool speaking =
 {
     QueueChatRect((float)pos.x, (float)pos.y, (float)pos.x + 128.f, (float)pos.y + 22.f,
                   on ? 0.f : .02f, on ? .26f : .02f, on ? .23f : .02f, .50f, false);
+    if(ChatButtonHovered(pos)) ChatCursorResource=IDC_POINTER_GREEN;
     const float border = speaking ? 1.f : ChatButtonHovered(pos) ? .8f : .35f;
     QueueChatRect((float)pos.x, (float)pos.y, (float)pos.x + 128.f, (float)pos.y + 22.f,
                   speaking ? .3f : border, border, speaking ? .8f : border, .95f, true);
@@ -111,6 +114,7 @@ public:
     }
     void draw(const cVoiceChat& voice) const {
         if(player<0)return;
+        if(hit(x,y,200,44))ChatCursorResource=hit(x+6,y+2,188,20)?IDC_POINTER_GREEN:IDC_POINTER_CYAN;
         const int percent=voice.userVolume(player);
         QueueChatRect(x,y,x+200,y+44,.06f,.07f,.07f,1.f,false);
         QueueChatRect(x,y,x+200,y+44,.35f,.45f,.4f,1.f,true);
@@ -194,6 +198,9 @@ void RunChatClient(HWND hWnd)
 {
     HDC dc = GetDC(hWnd);
     ChatBackground background;
+    const HCURSOR cyanCursor=LoadCursorA(GetModuleHandleA(nullptr),MAKEINTRESOURCEA(IDC_POINTER_CYAN));
+    const HCURSOR greenCursor=LoadCursorA(GetModuleHandleA(nullptr),MAKEINTRESOURCEA(IDC_POINTER_GREEN));
+    const HCURSOR yellowCursor=LoadCursorA(GetModuleHandleA(nullptr),MAKEINTRESOURCEA(IDC_POINTER_YELLOW));
     DragAcceptFiles(hWnd,TRUE);
     PackedClientSettings settings;
     cNetworkRuntime network(hWnd, &settings);
@@ -331,6 +338,7 @@ void RunChatClient(HWND hWnd)
             glDisable(GL_DEPTH_TEST);
             glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, App.size.x, 0, App.size.y, -1, 1);
             glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+            ChatCursorResource=!browser.shown(network) && chatBox.linkHovered(network) ? IDC_POINTER_YELLOW : IDC_POINTER_CYAN;
             background.draw(App.size.x, App.size.y);
             chatBox.draw(network, GetForegroundWindow() == hWnd, !browser.shown(network));
             DrawChatStatus(MakeChatStatus(network, voiceChat), userVolumes, chatBox.historyOffset(), !browser.shown(network));
@@ -340,6 +348,12 @@ void RunChatClient(HWND hWnd)
             DrawChatButton(selectingHotkey ? "PRESS KEY" : settings.talkKeyLabel().c_str(), hotkeyButton, selectingHotkey);
             DrawChatButton(!network.hasConnection() ? "HOST" : screenShare.watching() ? "STOP WATCH" : screenShare.sharing() ? "STOP SHARE" : "SCREEN",screenButton,screenShare.sharing());
             userVolumes.draw(voiceChat);
+            const HCURSOR cursor=ChatCursorResource==IDC_POINTER_GREEN ? greenCursor : ChatCursorResource==IDC_POINTER_YELLOW ? yellowCursor : cyanCursor;
+            if(reinterpret_cast<HCURSOR>(GetClassLongPtrA(hWnd,GCLP_HCURSOR))!=cursor)
+                SetClassLongPtrA(hWnd,GCLP_HCURSOR,reinterpret_cast<LONG_PTR>(cursor));
+            POINT mouse;GetCursorPos(&mouse);
+            if(WindowFromPoint(mouse)==hWnd){ScreenToClient(hWnd,&mouse);
+                if(mouse.x>=0 && mouse.y>=0 && mouse.x<App.size.x && mouse.y<App.size.y)SetCursor(cursor);}
             SwapBuffers(dc);
         }
 

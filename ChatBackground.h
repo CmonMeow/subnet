@@ -7,7 +7,7 @@
 
 class ChatBackground
 {
-    static constexpr int Width = 880, Height = 496;
+    static constexpr int Width = 1672, Height = 941;
     const unsigned char* _pixels = nullptr;
     std::vector<unsigned char> _scaled;
     int _width = 0, _height = 0;
@@ -19,12 +19,15 @@ class ChatBackground
         const double scale = (std::max)(double(width) / Width, double(height) / Height);
         const double left = (Width - width / scale) * .5;
         const double bottom = (Height - height / scale) * .5;
+        std::vector<int> columns(width);
+        for (int x = 0; x < width; ++x)
+            columns[x] = (std::min)(Width - 1, int(left + (x + .5) / scale));
         for (int y = 0; y < height; ++y)
         {
             const int sourceY = (std::min)(Height - 1, int(bottom + (y + .5) / scale));
             for (int x = 0; x < width; ++x)
             {
-                const int sourceX = (std::min)(Width - 1, int(left + (x + .5) / scale));
+                const int sourceX = columns[x];
                 if (_pixels[sourceY * (Width / 8) + sourceX / 8] & (0x80 >> (sourceX % 8)))
                     _scaled[size_t(y) * stride + x / 8] |= 0x80 >> (x % 8);
             }
