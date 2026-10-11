@@ -17,10 +17,44 @@ class cNetworkRuntime
     ULONGLONG _voiceActiveUntil = 0;
     FileSaveDialog _fileDialog;
     struct FileBudget { double bytes = 32768; double packets = 32; ULONGLONG time = GetTickCount64(); };
-    std::map<int, FileBudget> _fileBudgets;
+    struct RelayedFile { int from; vector<unsigned char> cipher; };
+    std::map<int, std::deque<RelayedFile>> _fileRelay;
+    size_t _fileRelayBytes = 0;
+    int _lastFileRelay = -1;
+    void clearFileRelay(int peer) {
+        for(auto it = _fileRelay.begin(); it != _fileRelay.end();) {
+            auto& queue = it->second;
+            const auto removed = std::remove_if(queue.begin(), queue.end(), [&](const RelayedFile& packet) {
+                if(it->first != peer && packet.from != peer) return false;
+                _fileRelayBytes -= packet.cipher.size();
+                return true;
+            });
+            queue.erase(removed, queue.end());
+            if(queue.empty()) it = _fileRelay.erase(it); else ++it;
+        }
+    }
+    void flushFileRelay() {
+        const auto started = GetTickCount64();
+        for(unsigned work = 0; work < 256 && !_fileRelay.empty(); ++work) {
+            auto it = _fileRelay.upper_bound(_lastFileRelay);
+            if(it == _fileRelay.end()) it = _fileRelay.begin();
+            _lastFileRelay = it->first;
+            auto& packet = it->second.front();
+            if(fileQueueAvailable(it->first, packet.cipher.size() <= 552)) {
+                NetPacket raw;
+                raw.putInt32(packet.from);
+                raw.putBytes(packet.cipher, FileTransfers::MaxPacketBytes + 40);
+                if(sendRawFromServer(it->first, NAMTFile, raw, DeliveryGuaranteed)) {
+                    _fileRelayBytes -= packet.cipher.size();
+                    it->second.pop_front();
+                    if(it->second.empty()) _fileRelay.erase(it);
+                }
+            }
+            if(GetTickCount64() - started >= 2) break;
+        }
+    }
     struct PeerBudget { FileBudget voice, control; };
     std::map<int, PeerBudget> _peerBudgets;
-    FileBudget _relayBudget{8388608, 65536, GetTickCount64()};
     bool fileBudget(FileBudget& budget, size_t bytes, double rate, double packetRate = 4096) {
         const auto now = GetTickCount64(); const double elapsed = (now-budget.time)/1000.0; budget.time = now;
         budget.bytes = (std::min)(rate, budget.bytes + elapsed*rate);
@@ -49,9 +83,8 @@ class cNetworkRuntime
         if (crypto_box_easy(cipher.data()+crypto_box_NONCEBYTES,plain.data(),plain.size(),cipher.data(),
             (const unsigned char*)key->second.data(),_privateChatSecretKey) != 0) return false;
         NetPacket raw; raw.putInt32(isHost() ? 0 : to); raw.putBytes(cipher,FileTransfers::MaxPacketBytes+40);
-        if (isHost()) sendRawFromServer(to,NAMTFile,raw,DeliveryGuaranteed);
-        else sendRawFromClient(NAMTFile,raw,DeliveryGuaranteed);
-        return true;
+        return isHost() ? sendRawFromServer(to,NAMTFile,raw,DeliveryGuaranteed) :
+            sendRawFromClient(NAMTFile,raw,DeliveryGuaranteed);
     }
     void receiveFilePayload(int from, const vector<unsigned char>& cipher) {
         auto key = _privateChatKeys.find(from);
@@ -68,12 +101,21 @@ class cNetworkRuntime
         if (!raw.getInt32(peer) || peer < 0 || !raw.getBytes(cipher,FileTransfers::MaxPacketBytes+40) || !raw.fullyRead() || cipher.size() <= 40) return;
         const int sender = relay ? from : peer;
         if (!_privateChatKeys.count(sender)) return;
-        auto budget = _fileBudgets.try_emplace(sender, FileBudget{2097152, 8192, GetTickCount64()});
-        if (!fileBudget(budget.first->second,cipher.size(),134217728,65536)) return;
         if (relay && peer != 0) {
-            if (peer == from || !_playerIdentities.count(peer) || !fileQueueAvailable(peer,cipher.size()<=552) || !fileBudget(_relayBudget,cipher.size(),536870912,262144)) return;
-            NetPacket forwarded; forwarded.putInt32(from); forwarded.putBytes(cipher,FileTransfers::MaxPacketBytes+40);
-            sendRawFromServer(peer,NAMTFile,forwarded,DeliveryGuaranteed);
+            if (peer == from || !_playerIdentities.count(peer)) return;
+            NetPacket forwarded;
+            forwarded.putInt32(from);
+            forwarded.putBytes(cipher,FileTransfers::MaxPacketBytes+40);
+            if (!_fileRelay.count(peer) && fileQueueAvailable(peer,cipher.size()<=552) &&
+                sendRawFromServer(peer,NAMTFile,forwarded,DeliveryGuaranteed)) return;
+            // Queue congestion, not a bandwidth cap. Never silently acknowledge
+            // data we cannot retain: retire the sender explicitly on exhaustion.
+            if (_fileRelayBytes + cipher.size() > 64 * 1024 * 1024) {
+                endPlayerSession(from, DisconnectOther, "File relay backlog exhausted. Reconnect and retry.");
+                return;
+            }
+            _fileRelayBytes += cipher.size();
+            _fileRelay[peer].push_back({from,std::move(cipher)});
         } else receiveFilePayload(sender,cipher);
     }
     void announceFile(int from, const string& id) {
@@ -355,7 +397,9 @@ class cNetworkRuntime
             messageSize = (__int32)decrypted.size();
             return true;
         }
-        return header->type == NAMTKeyHello;
+        const auto session = _serverCrypto.find(from);
+        return header->type == NAMTKeyHello &&
+            (session == _serverCrypto.end() || !session->second.ready());
     }
 
     void sendPlainRawFromClient(ChatPacketKind type, const NetPacket& raw)
@@ -473,7 +517,8 @@ class cNetworkRuntime
             _localPlayerId = assignPacket.playerId;
             _participantsDirty = true;
             if (_localPlayerId >= 0) _connectDeadline = 0;
-            if (_settings && _localPlayerId >= 0) _settings->setServerAddress(_connectingAddress);
+            if (_settings && _localPlayerId >= 0 && !_settings->setServerAddress(_connectingAddress))
+                showNotice("Connected; could not save server setting.", true);
 
             return;
         }
@@ -500,7 +545,7 @@ class cNetworkRuntime
             _playerIdentities.swap(roster);
             _participantsDirty = true;
             for (auto it = _privateChatKeys.begin(); it != _privateChatKeys.end();)
-                if (!_playerIdentities.count(it->first)) { _screens.peerLeft(it->first); _files.peerLeft(it->first); _fileBudgets.erase(it->first); _privateChatNames.erase(it->first); it = _privateChatKeys.erase(it); }
+                if (!_playerIdentities.count(it->first)) { _screens.peerLeft(it->first); _files.peerLeft(it->first); clearFileRelay(it->first); _privateChatNames.erase(it->first); it = _privateChatKeys.erase(it); }
                 else ++it;
             return;
         }
@@ -581,6 +626,7 @@ class cNetworkRuntime
         {
             if (_clientCrypto.acceptServerKey(keyBytes))
             {
+                _client->SetPacketKeys(_clientCrypto.receiveKey(), _clientCrypto.sendKey());
                 sendRawIdentityFromClient();
                 sendPrivateChatKeyFromClient();
             }
@@ -675,6 +721,7 @@ class cNetworkRuntime
             {
                 NetPacket raw;
                 raw.put(response.data(), (__int32)response.size());
+                _server->SetPacketKeys(from, _serverCrypto[from].receiveKey(), _serverCrypto[from].sendKey());
                 sendPlainRawFromServer(from, NAMTKeyAccept, raw);
             }
             else
@@ -748,7 +795,7 @@ class cNetworkRuntime
         _playerIdentities.erase(player);
         _screens.peerLeft(player);
         _files.peerLeft(player);
-        _fileBudgets.erase(player);
+        clearFileRelay(player);
         _peerBudgets.erase(player);
         _privateChatKeys.erase(player);
         _privateChatNames.erase(player);
@@ -834,41 +881,41 @@ class cNetworkRuntime
         }
     }
 
-    void sendRawFromClient(ChatPacketKind type, const NetPacket& raw, DeliveryOptions flags)
+    bool sendRawFromClient(ChatPacketKind type, const NetPacket& raw, DeliveryOptions flags)
     {
         if (!_client)
         {
-            return;
+            return false;
         }
         string payload = BuildAppRawMessage(type, raw);
         string encrypted;
         if (!_clientCrypto.encrypt(payload, encrypted))
         {
-            return;
+            return false;
         }
         DWORD msgID = 0;
-        _client->SendPayload((BYTE*)encrypted.data(), (__int32)encrypted.size(), msgID, flags, IntrusivePtr<PacketBuffer>());
+        return (bool)_client->SendPayload((BYTE*)encrypted.data(), (__int32)encrypted.size(), msgID, flags, IntrusivePtr<PacketBuffer>());
     }
 
-    void sendRawFromServer(__int32 player, ChatPacketKind type, const NetPacket& raw, DeliveryOptions flags)
+    bool sendRawFromServer(__int32 player, ChatPacketKind type, const NetPacket& raw, DeliveryOptions flags)
     {
-        sendPayloadFromServer(player, BuildAppRawMessage(type, raw), flags);
+        return sendPayloadFromServer(player, BuildAppRawMessage(type, raw), flags);
     }
 
-    void sendPayloadFromServer(__int32 player, const string& payload, DeliveryOptions flags)
+    bool sendPayloadFromServer(__int32 player, const string& payload, DeliveryOptions flags)
     {
         if (!_server)
         {
-            return;
+            return false;
         }
         std::map<__int32, cCryptoSession>::iterator found = _serverCrypto.find(player);
         string encrypted;
         if (found == _serverCrypto.end() || !found->second.encrypt(payload, encrypted))
         {
-            return;
+            return false;
         }
         DWORD msgID = 0;
-        _server->SendPayload(player, (BYTE*)encrypted.data(), (__int32)encrypted.size(), msgID, flags, IntrusivePtr<PacketBuffer>());
+        return (bool)_server->SendPayload(player, (BYTE*)encrypted.data(), (__int32)encrypted.size(), msgID, flags, IntrusivePtr<PacketBuffer>());
     }
 
     void sendRawStringFromClient(ChatPacketKind type, const string& message, size_t maxLength)
@@ -1270,6 +1317,8 @@ public:
 
     bool hostOnPort(unsigned short port = DEFAULT_NETWORK_PORT)
     {
+        _statusNotice.clear();
+        _statusNoticeUntil = 0;
         if (_server || _client)
         {
             addChatLine("network already active", CLKError);
@@ -1310,6 +1359,8 @@ public:
 
     bool connectTo(const string& requestedAddress)
     {
+        _statusNotice.clear();
+        _statusNoticeUntil = 0;
         if (_client || _server)
         {
             addChatLine("network already active", CLKError);
@@ -1324,6 +1375,12 @@ public:
         const string address = requestedAddress.empty()
             ? (_settings ? _settings->serverAddress : DEFAULT_NETWORK_ADDRESS) : requestedAddress;
         unsigned short port = DEFAULT_NETWORK_PORT;
+        string host;
+        if (!parseServerAddress(address, host, port))
+        {
+            showNotice("Invalid server address or port.", true);
+            return false;
+        }
         _client = MakeClientSession();
         JoinResult result = _client ? _client->StartSession(address, "", false, port, "oi", NULL) : JoinError;
         if (result != JoinOK && result != JoinNone)
@@ -1351,6 +1408,7 @@ public:
             return;
         }
         drainEndingPeers();
+        flushFileRelay();
         int filePeer; string fileId; std::wstring destination;
         if (_fileDialog.poll(filePeer,fileId,destination) && !destination.empty()) _files.accept({filePeer,fileId},destination);
         if (_client && _connectDeadline && GetTickCount64() >= _connectDeadline)
@@ -1502,17 +1560,17 @@ public:
             if (hasConnection()) { showNotice("Use /disconnect before enabling dedicated mode.", true); return; }
             if (!hostOnPort()) return;
         }
-        _settings->setDedicated(enable);
+        if (!_settings->setDedicated(enable)) { showNotice("Could not save startup setting.", true); return; }
         showNotice(enable ? "Dedicated on: host automatically at startup." : "Dedicated off: automatic hosting disabled.");
     }
 
-    string participantSessionKey(int player) const {auto it=_privateChatKeys.find(player);return it==_privateChatKeys.end()?string():it->second;}
     void setHostName(const string& argument) {
         const auto name=TrimWhitespace(argument);
         if(!_settings)return;
         if(name.empty()){showNotice("Host name: "+_settings->hostName);return;}
         if(!HostDirectory::validName(name.c_str())){showNotice("Host name must be 1-32 printable characters.",true);return;}
-        _settings->hostName=name;_settings->save();showNotice("Host name: "+name);
+        if (!_settings->setHostName(name)) { showNotice("Could not save host name.", true); return; }
+        showNotice("Host name: " + name);
     }
     void changeName(const string& argument)
     {
@@ -1527,10 +1585,11 @@ public:
             addChatLine("usage: /name username (1-32 letters: a-z, A-Z only)", CLKError);
             return;
         }
-        std::ofstream file("ClientName.txt", std::ios::trunc);
-        file << name << "\n";
-        file.close();
-        if (!file) { addChatLine("Could not save your name.", CLKError); return; }
+        if (name != LocalUserName() && !SaveClientFile("ClientName.txt", name + "\n"))
+        {
+            addChatLine("Could not save your name.", CLKError);
+            return;
+        }
         if (_client || _server) sendChat("/name " + name);
         else addChatLine("Name saved: " + name, CLKSystem);
     }
@@ -1670,7 +1729,7 @@ public:
         if (!_client && !_server) return false;
         if(_disconnectDeadline)return true;
         _screens.clear();
-        _files.clear(); _fileBudgets.clear(); _peerBudgets.clear(); _voiceActiveUntil = 0;
+        _files.clear(); _fileRelay.clear(); _fileRelayBytes = 0; _peerBudgets.clear(); _voiceActiveUntil = 0;
         _transportConnecting = false;
         _connectDeadline = 0;
         if (_client && !_remoteEnded) sendRawControlFromClient(NAMTDisconnect);

@@ -4,6 +4,8 @@
 #include "Network/SessionTransport.hpp"
 #include "sodium.h"
 #include <algorithm>
+#include <bitset>
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -15,7 +17,7 @@ using std::vector;
 
 const char* const DEFAULT_NETWORK_ADDRESS = "nigger.observer";
 const unsigned short DEFAULT_NETWORK_PORT = 777;
-const __int32 APP_PROTOCOL_VERSION = 30;
+const __int32 APP_PROTOCOL_VERSION = 31;
 const char* const BAN_LIST_FILENAME = "banlist.txt";
 const size_t CHAT_MAX_MESSAGE_CHARS = 140;
 const size_t CHAT_MAX_LINE_CHARS = 192;
@@ -631,6 +633,10 @@ inline bool ParseAppPacket(const char* buffer, __int32 bufferSize, ChatPacketKin
 
 class cCryptoSession
 {
+    static constexpr size_t ReplayWindow = 65536;
+    uint64_t _sendSequence = 0;
+    uint64_t _receiveSequence = 0;
+    std::bitset<ReplayWindow> _received;
     bool _hasKeypair;
     bool _ready;
     unsigned char _publicKey[crypto_kx_PUBLICKEYBYTES];
@@ -649,10 +655,17 @@ public:
         memset(_tx, 0, sizeof(_tx));
     }
 
+    ~cCryptoSession() { clear(); }
+
     bool ready() const { return _ready; }
+    const unsigned char* receiveKey() const { return _rx; }
+    const unsigned char* sendKey() const { return _tx; }
 
     void clear()
     {
+        _sendSequence = 0;
+        _receiveSequence = 0;
+        _received.reset();
         _hasKeypair = false;
         _ready = false;
         sodium_memzero(_publicKey, sizeof(_publicKey));
@@ -663,6 +676,7 @@ public:
 
     bool buildClientHello(string& payload)
     {
+        clear();
         if (crypto_kx_keypair(_publicKey, _secretKey) != 0)
         {
             return false;
@@ -691,6 +705,7 @@ public:
 
     bool acceptClientHello(const string& payload, string& response)
     {
+        clear();
         if (payload.size() != crypto_kx_PUBLICKEYBYTES)
         {
             return false;
@@ -713,12 +728,15 @@ public:
 
     bool encrypt(const string& plain, string& payload)
     {
-        if (!_ready)
+        if (!_ready || _sendSequence == UINT64_MAX)
         {
             return false;
         }
         unsigned char nonce[crypto_aead_xchacha20poly1305_ietf_NPUBBYTES];
         randombytes_buf(nonce, sizeof(nonce));
+        const uint64_t sequence = ++_sendSequence;
+        for (unsigned i = 0; i < sizeof(sequence); ++i)
+            nonce[sizeof(nonce) - sizeof(sequence) + i] = (unsigned char)(sequence >> (i * 8));
 
         payload.resize(sizeof(ChatPacketPrefix) + sizeof(nonce) + plain.size() + crypto_aead_xchacha20poly1305_ietf_ABYTES);
         ChatPacketPrefix header;
@@ -741,7 +759,7 @@ public:
 
     bool decrypt(const char* buffer, __int32 bufferSize, string& plain)
     {
-        if (!_ready ||
+        if (!_ready || !buffer ||
             bufferSize < (__int32)(sizeof(ChatPacketPrefix) + crypto_aead_xchacha20poly1305_ietf_NPUBBYTES + crypto_aead_xchacha20poly1305_ietf_ABYTES) ||
             (size_t)bufferSize > NET_MAX_ENCRYPTED_BYTES)
         {
@@ -753,6 +771,15 @@ public:
             return false;
         }
         const unsigned char* nonce = reinterpret_cast<const unsigned char*>(buffer + sizeof(ChatPacketPrefix));
+        uint64_t sequence = 0;
+        for (unsigned i = 0; i < sizeof(sequence); ++i)
+            sequence |= uint64_t(nonce[crypto_aead_xchacha20poly1305_ietf_NPUBBYTES - sizeof(sequence) + i]) << (i * 8);
+        if (!sequence || (sequence <= _receiveSequence &&
+            (_receiveSequence - sequence >= ReplayWindow || _received[(size_t)(sequence % ReplayWindow)])))
+        {
+            plain.clear();
+            return false;
+        }
         const unsigned char* cipher = reinterpret_cast<const unsigned char*>(buffer + sizeof(ChatPacketPrefix) + crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
         const __int32 cipherSize = bufferSize - (__int32)(sizeof(ChatPacketPrefix) + crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
         plain.resize(cipherSize);
@@ -765,6 +792,16 @@ public:
             plain.clear();
             return false;
         }
+        // Commit only after authentication. Forged counters must not evict valid packets.
+        if (sequence > _receiveSequence)
+        {
+            const uint64_t advance = sequence - _receiveSequence;
+            if (advance >= ReplayWindow) _received.reset();
+            else for (uint64_t step = 1; step <= advance; ++step)
+                _received.reset((size_t)((_receiveSequence + step) % ReplayWindow));
+            _receiveSequence = sequence;
+        }
+        _received.set((size_t)(sequence % ReplayWindow));
         plain.resize((size_t)plainBytes);
         return true;
     }

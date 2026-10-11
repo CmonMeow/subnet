@@ -69,7 +69,7 @@ public:
     void beginRows(){rows.clear();}
     size_t first(size_t count){if(offset>=count)offset=0;return offset;}
     void row(int id,float x,float y,float width,const string& label=""){rows.push_back({id,x,y,width,label});}
-    bool update(cNetworkRuntime& network,cVoiceChat& voice,bool focused) {
+    bool update(cNetworkRuntime& network,cVoiceChat& voice,PackedClientSettings& settings,bool focused) {
         if(!focused){player=-1;dragging=false;return false;}
         if(!dragging&&hit(12,(float)App.size.y-56,(float)App.size.x-24,22)){
             const int wheel=input.ConsumeMouseWheel();
@@ -96,14 +96,14 @@ public:
         }
         if(dragging){
             const int percent=(int)((input.mouse.x-(x+12))*200/176+.5f);
-            voice.setUserVolume(player,percent,network);
+            voice.setUserVolume(player,percent,network,settings);
             input.KeyUp(VK_LBUTTON);
             if(!(GetAsyncKeyState(VK_LBUTTON)&0x8000)&&GetCapture()!=GetActiveWindow())dragging=false;
             return true;
         }
         if(hit(x,y,200,44)){
             const int wheel=input.ConsumeMouseWheel();
-            if(wheel)voice.setUserVolume(player,voice.userVolume(player)+(wheel>0?5:-5),network);
+            if(wheel)voice.setUserVolume(player,voice.userVolume(player)+(wheel>0?5:-5),network,settings);
             return wheel!=0;
         }
         return false;
@@ -205,15 +205,20 @@ void RunChatClient(HWND hWnd)
     };
     cVoiceChat voiceChat;
     MessageChimeCooldown chimeCooldown;
+    std::function<void(bool)> appFocusChanged = [&](bool active) {
+        chimeCooldown.focusChanged(active);
+        if(active) voiceChat.cancelMessageChime();
+    };
+    SetPropA(hWnd, "ChatAppFocus", &appFocusChanged);
     auto updateChimeFocus = [&] {
         DWORD foregroundProcess = 0;
         GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
-        chimeCooldown.focusChanged(foregroundProcess == GetCurrentProcessId());
+        appFocusChanged(foregroundProcess == GetCurrentProcessId());
     };
     network.messageReceived = [&] {
         updateChimeFocus();
         const auto now = GetTickCount64();
-        if(settings.voiceEnabled() && chimeCooldown.ready(now) && voiceChat.messageChime())
+        if(chimeCooldown.ready(now) && voiceChat.messageChime())
             chimeCooldown.played(now);
     };
     ParticipantVolume userVolumes;
@@ -297,21 +302,20 @@ void RunChatClient(HWND hWnd)
             else if(network.isHost() || network.clientReady()) screenShare.toggle();
             else if(!network.hasConnection()) {chatBox.deactivate();network.hostOnPort();}
         }
-        if (micClicked && !settings.voiceEnabled()) settings.toggleVoiceEnabled();
         if (hotkeyClicked)
         {
             selectingHotkey = !selectingHotkey;
             input.Clear();
             voiceChat.resetTransmitMode();
         }
-        const bool volumeInput=modal || userVolumes.update(network,voiceChat,GetForegroundWindow()==hWnd);
+        const bool volumeInput=modal || userVolumes.update(network,voiceChat,settings,GetForegroundWindow()==hWnd);
         if (!selectingHotkey && !releaseHotkey && !volumeInput) chatBox.update(network);
         input.ConsumeMouseWheel();
         const bool talkDown = !modal && !selectingHotkey && !releaseHotkey &&
             (screenShare.focused() ? (GetAsyncKeyState(settings.talkKey)&0x8000)!=0 :
              input.pressed(settings.talkKey) && !chatBox.active());
-        if (talkDown && !settings.voiceEnabled()) settings.toggleVoiceEnabled();
         voiceChat.update(network, talkDown, settings, micClicked);
+        if (!settings.flushVolumes(now)) network.showNotice("Could not save user volumes.", true);
 
         // Audio and network run at least every 10 ms; drawing targets 60 Hz.
         if (!IsIconic(hWnd) && now >= nextDraw)
@@ -386,7 +390,8 @@ void RunChatClient(HWND hWnd)
                     selectingHotkey = false;
                 else if (msg.wParam >= VK_BACK && msg.wParam < 255)
                 {
-                    settings.setTalkKey((unsigned char)msg.wParam);
+                    if (!settings.setTalkKey((unsigned char)msg.wParam))
+                        network.showNotice("Could not save PTT setting.", true);
                     selectingHotkey = false;
                 }
                 releaseHotkey = (unsigned char)msg.wParam;
@@ -416,10 +421,12 @@ void RunChatClient(HWND hWnd)
         Sleep(static_cast<DWORD>((std::max)(1.0, (std::min)(10.0, std::ceil(waitMS)))));
     }
 
+    if (!settings.flushVolumes(GetTickCount64(), true)) Error("Could not save user volumes at shutdown");
     RemovePropA(hWnd, "ChatModalTick");
     screenShare.close();
     RemovePropA(hWnd, "ChatCommandsMenu");
     if(commandMenu) DestroyMenu(commandMenu);
+    RemovePropA(hWnd, "ChatAppFocus");
     network.messageReceived={};
     network.openScreen={};
     DragAcceptFiles(hWnd,FALSE);

@@ -43,6 +43,7 @@
     </PreBuildEvent>
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)third_party\opus\include;$(ProjectDir)third_party\libsodium\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;SODIUM_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -130,6 +131,7 @@
     <ClInclude Include="Network\InboundQueue.hpp" />
     <ClInclude Include="Network\IntrusivePtr.h" />
     <ClInclude Include="Network\TransportCore.hpp" />
+    <ClInclude Include="Network\DatagramAuthentication.hpp" />
     <ClInclude Include="Network\ReliableChannel.hpp" />
     <ClInclude Include="Network\DatagramFormat.hpp" />
     <ClInclude Include="Network\PacketBuffer.hpp" />

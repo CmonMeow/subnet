@@ -17,7 +17,6 @@ class ClientSession;
 class HostSession;
 
 unsigned short DefaultListenPort() { return 777; }
-void parseServerAddress(std::string address, std::string& ip, unsigned short& port);
 IntrusivePtr<PacketBuffer> assembleFragments(PacketBuffer* msg);
 EndpointRegistry* endpointRegistry();
 
@@ -242,6 +241,12 @@ public:
 
 
 	JoinResult PollJoin() override;
+
+    void SetPacketKeys(const unsigned char* receive, const unsigned char* send) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(receiptMutex);
+        if (channel) channel->authentication.setKeys(receive, send, false);
+    }
 
 	virtual IntrusivePtr<PacketBuffer> SendPayload(BYTE* buffer, __int32 bufferSize, DWORD& msgID, DeliveryOptions flags, const IntrusivePtr<PacketBuffer>& dependOn);
 
@@ -487,6 +492,13 @@ public:
 	}
 
 	virtual IntrusivePtr<PacketBuffer> SendPayload(__int32 to, BYTE* buffer, __int32 bufferSize, DWORD& msgID, DeliveryOptions flags, const IntrusivePtr<PacketBuffer>& dependOn);
+
+    void SetPacketKeys(int player, const unsigned char* receive, const unsigned char* send) override
+    {
+        std::lock_guard<std::recursive_mutex> lock(peerStateMutex);
+        IntrusivePtr<ChannelInterface> channel;
+        if (users.get(player, channel)) channel->authentication.setKeys(receive, send, true);
+    }
 
 	virtual void DiscardOutbound();
 
@@ -938,7 +950,7 @@ JoinResult ClientSession::StartSession(std::string address, std::string password
 {
     if (channel || connectResult == JoinNone) return JoinError;
     std::string ip;
-    parseServerAddress(address.empty() ? "127.0.0.1" : address, ip, port);
+    if (!parseServerAddress(address.empty() ? "127.0.0.1" : address, ip, port)) return JoinError;
     connectingAddress.sin_family = AF_INET;
     connectingAddress.sin_port = htons(port);
     resolving = InetPtonA(AF_INET, ip.c_str(), &connectingAddress.sin_addr) != 1;

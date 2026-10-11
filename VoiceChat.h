@@ -1,6 +1,7 @@
 #pragma once
 
 #include "NetworkProtocol.h"
+#include "ClientSettings.h"
 #include "VoiceMixer.h"
 #include "VoiceProcessing.h"
 #include "VoiceCapture.h"
@@ -29,14 +30,15 @@ class cVoiceChat
     cVoiceProcessing _processing;
     typedef cVoiceProcessing::Frame AudioFrame;
     cVoiceMixer _mixer;
-    bool _networkWasActive = false, _voiceWasEnabled = false;
+    bool _networkWasActive = false;
     bool _recording;
     bool _transmitEnabled;
     bool _buttonTransmitEnabled = false;
     unsigned __int64 _lastVoiceSent = 0;
     bool _captureFailed = false;
     bool _playbackReady;
-    unsigned _chimeSample = 5120;
+    static constexpr unsigned ChimeSamples = VoiceAudioFormat::SampleRate * 320 / 1000;
+    unsigned _chimeSample = ChimeSamples;
     unsigned __int32 _sequence;
 
     // All application capture state and codec access stays on the UI thread.
@@ -122,8 +124,8 @@ class cVoiceChat
         {
             AudioFrame frame = _mixer.render(GetTickCount64());
             for(auto& sample : frame) {
-                if(_chimeSample >= 5120) break;
-                const double t = _chimeSample++ / 16000.0;
+                if(_chimeSample >= ChimeSamples) break;
+                const double t = _chimeSample++ / double(VoiceAudioFormat::SampleRate);
                 const double noteTime = t < 0.175 ? t : t - 0.175;
                 if(noteTime >= 0.145) continue;
                 const double frequency = t < 0.175 ? 523.25 : 783.99;
@@ -180,6 +182,7 @@ class cVoiceChat
     }
 
 public:
+    void cancelMessageChime() { _chimeSample = ChimeSamples; }
     bool messageChime() {
         if(!_playbackReady) return false;
         _chimeSample = 0;
@@ -235,7 +238,13 @@ public:
     }
 
     int userVolume(int player) const {return _mixer.volume(player);}
-    void setUserVolume(int player,int percent,const cNetworkRuntime& network){_mixer.setVolume(player,percent,network.participantSessionKey(player));}
+    void setUserVolume(int player,int percent,const cNetworkRuntime& network,PackedClientSettings& settings) {
+        for (const auto& person : network.participants()) if (person.first == player) {
+            settings.setUserVolume(person.second,percent);
+            _mixer.setVolume(player,percent);
+            break;
+        }
+    }
 
     bool micEnabled() const { return _transmitEnabled && _recording; }
 
@@ -254,23 +263,9 @@ public:
         const bool networkActive = network.clientReady() || network.isHost();
         if (_networkWasActive && !networkActive) {cleanupPlaybackBuffers(true);_mixer.clearVolumes();}
         _mixer.retainPlayers(network.participants());
-        _mixer.validateVolumes([&](int player){return network.participantSessionKey(player);});
+        for (const auto& person : network.participants())
+            _mixer.setVolume(person.first,settings.userVolume(person.second));
         _networkWasActive = networkActive;
-        if (!settings.voiceEnabled())
-        {
-            _transmitEnabled = false;
-            _buttonTransmitEnabled = false;
-            stopRecording();
-            NetworkVoicePacket packet;
-            while (network.consumeVoicePacket(packet))
-            {
-            }
-            if(_voiceWasEnabled)cleanupPlaybackBuffers(true);
-            _voiceWasEnabled=false;
-            return;
-        }
-
-        _voiceWasEnabled=true;
         if (!talkKeyDown) _captureFailed = false;
         if (micClicked) _buttonTransmitEnabled = !_buttonTransmitEnabled;
         // PTT takes over from a latched mic; releasing the key must mute it.

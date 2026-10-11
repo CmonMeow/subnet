@@ -1,15 +1,21 @@
 
 
-void parseServerAddress(std::string address, std::string& ip, unsigned short& port)
+bool parseServerAddress(const std::string& address, std::string& ip, unsigned short& port)
 {
-	const char* ptr = strrchr(address.c_str(), ':');
-	if (!ptr)
-	{
-		ip = address;
-		return;
-	}
-	ip = address.substr(0, ptr - address.c_str());
-	port = atoi(ptr + 1);
+    const auto colon = address.find(':');
+    ip = address.substr(0, colon);
+    if(ip.empty() || ip.find_first_of(" \t\r\n") != std::string::npos) return false;
+    if(colon == std::string::npos) return port != 0;
+    unsigned value = 0;
+    if(colon + 1 == address.size()) return false;
+    for(size_t i = colon + 1; i < address.size(); ++i) {
+        if(address[i] < '0' || address[i] > '9') return false;
+        value = value * 10 + (address[i] - '0');
+        if(value > 65535) return false;
+    }
+    if(!value) return false;
+    port = static_cast<unsigned short>(value);
+    return true;
 }
 
 EndpointRegistry* endpointRegistry()

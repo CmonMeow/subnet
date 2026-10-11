@@ -99,7 +99,7 @@ DWORD WINAPI runUdpWorker(void* param)
 	union
 	{
 		DatagramHeader header;
-		char data[DatagramReceiveBufferBytes]; 
+		char data[DatagramReceiveBufferBytes + DatagramAuthentication::TagBytes];
 	};
 	UdpEndpoint* peer = (UdpEndpoint*)param;
 	fd_set set;				 
@@ -146,12 +146,23 @@ DWORD WINAPI runUdpWorker(void* param)
 
 			fromLen = sizeof(from);
 			memset(&from, 0, sizeof(from)); 
-			error = recvfrom(peer->sock, data, DatagramReceiveBufferBytes - 1, 0, (struct sockaddr*)&from, &fromLen);
+			error = recvfrom(peer->sock, data, sizeof(data), 0, (struct sockaddr*)&from, &fromLen);
             if (error > 0) peer->incomingBytes.fetch_add(error, std::memory_order_relaxed);
             if (error > 0 && HostDirectoryProbe::instance().receive(peer->sock,data,error,from)) continue;
-			if (error != SOCKET_ERROR && error >= (__int32)sizeof(DatagramHeader) && error <= DatagramReceiveBufferBytes &&
-				error == (__int32)header.length && header.length <= DatagramReceiveBufferBytes)
+			if (error != SOCKET_ERROR && error >= (__int32)sizeof(DatagramHeader) && error <= (int)sizeof(data) &&
+                header.length >= sizeof(DatagramHeader) && header.length <= DatagramReceiveBufferBytes)
 			{
+                IntrusivePtr<ChannelInterface> authenticatedChannel;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(peer->stateMutex);
+                    const auto found = peer->chMap.find(udpEndpointKey(from));
+                    if (found != peer->chMap.end()) authenticatedChannel = found->second;
+                }
+                if (authenticatedChannel)
+                {
+                    if (!authenticatedChannel->authentication.verify((unsigned char*)data, header.length, error)) continue;
+                }
+                else if (error != header.length) continue;
 				unsigned __int32 crc = header.crc;
 				header.crc = 0;
 

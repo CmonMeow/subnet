@@ -182,18 +182,23 @@ public:
 
 	virtual PacketStatus transmitDatagram(DatagramHeader* hdr, struct sockaddr_in distant)
 	{
-		stateMutex.lock();
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
 		if (sock != INVALID_SOCKET)
 		{
+            if (hdr->length < sizeof(DatagramHeader) || hdr->length > DatagramReceiveBufferBytes) return PacketError;
 			hdr->crc = 0;
 			hdr->crc = crc32(0, (const unsigned char*)hdr, hdr->length);
 
+            unsigned char packet[DatagramReceiveBufferBytes + DatagramAuthentication::TagBytes];
+            memcpy(packet, hdr, hdr->length);
+            size_t packetBytes = hdr->length;
+            const auto channel = chMap.find(udpEndpointKey(distant));
+            if (channel != chMap.end()) packetBytes = channel->second->authentication.sign(packet, packetBytes);
 			char retryCounter = 12;
 		retry:
-			if (sendto(sock, reinterpret_cast<const char*>(hdr), hdr->length, 0, (const sockaddr*)&distant, sizeof(distant)) != SOCKET_ERROR)
+			if (sendto(sock, reinterpret_cast<const char*>(packet), (int)packetBytes, 0, (const sockaddr*)&distant, sizeof(distant)) != SOCKET_ERROR)
 			{
-                outgoingBytes.fetch_add(hdr->length, std::memory_order_relaxed);
-				stateMutex.unlock();
+                outgoingBytes.fetch_add(packetBytes, std::memory_order_relaxed);
 				return PacketOutputSent;
 			}
 			__int32 werror = WSAGetLastError();
@@ -210,7 +215,6 @@ public:
 					goto retry;
 			}
 		}
-		stateMutex.unlock();
 		return PacketError;
 	}
 

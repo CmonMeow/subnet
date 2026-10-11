@@ -26,8 +26,8 @@ private:
     };
     std::map<int32_t, std::unique_ptr<Stream>> _streams;
     float _gain = 1.f;
-    struct Volume {int percent;string session;};
-    std::map<int32_t,Volume> _volumes;
+
+    std::map<int32_t,int> _volumes;
 
     static int32_t distance(uint32_t a, uint32_t b) { return static_cast<int32_t>(a - b); }
 
@@ -73,11 +73,10 @@ private:
 
 public:
     void clear() { _streams.clear(); _gain = 1.f; }
-    int volume(int32_t player) const {auto it=_volumes.find(player);return it==_volumes.end()?100:it->second.percent;}
-    void setVolume(int32_t player,int percent,const string& session="") {percent=(std::max)(0,(std::min)(200,percent));if(percent==100)_volumes.erase(player);else _volumes[player]={percent,session};}
-    template<class Identity> void validateVolumes(Identity identity){
-        for(auto it=_volumes.begin();it!=_volumes.end();)
-            if(it->second.session!=identity(it->first))it=_volumes.erase(it);else ++it;
+    int volume(int32_t player) const {auto it=_volumes.find(player);return it==_volumes.end()?100:it->second;}
+    void setVolume(int32_t player,int percent) {
+        percent=(std::max)(0,(std::min)(200,percent));
+        if(percent==100)_volumes.erase(player);else _volumes[player]=percent;
     }
     void clearVolumes(){_volumes.clear();}
     template<class People> void retainPlayers(const People& people) {

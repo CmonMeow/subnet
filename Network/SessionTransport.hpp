@@ -114,6 +114,7 @@ public:
 
 	// StartSession starts an attempt; poll without blocking until the result is not JoinNone.
 	virtual JoinResult PollJoin() = 0;
+    virtual void SetPacketKeys(const unsigned char* receive, const unsigned char* send) = 0;
 
 	virtual IntrusivePtr<PacketBuffer> SendPayload(BYTE* buffer, __int32 bufferSize, DWORD& msgID, DeliveryOptions flags, const IntrusivePtr<PacketBuffer>& dependOn) = 0;
 	virtual void QueryPendingSends(__int32& nMsg, __int32& nBytes, __int32& nMsgG, __int32& nBytesG) = 0;
@@ -161,6 +162,7 @@ public:
 	virtual __int32 ListenPort() = 0;
 
 	virtual IntrusivePtr<PacketBuffer> SendPayload(__int32 to, BYTE* buffer, __int32 bufferSize, DWORD& msgID, DeliveryOptions flags, const IntrusivePtr<PacketBuffer>& dependOn) = 0;
+    virtual void SetPacketKeys(int player, const unsigned char* receive, const unsigned char* send) = 0;
 	virtual void DiscardOutbound() = 0;
 	virtual void QueryPendingSends(__int32 to, __int32& nMsg, __int32& nBytes, __int32& nMsgG, __int32& nBytesG) = 0;
 	virtual bool QueryConnectionMetrics(__int32 to, __int32& latencyMS, __int32& throughputBPS) = 0;
@@ -195,6 +197,8 @@ public:
 };
 
 
+
+bool parseServerAddress(const std::string& address, std::string& host, unsigned short& port);
 
 ClientSessionInterface* MakeClientSession();
 

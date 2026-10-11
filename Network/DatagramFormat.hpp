@@ -20,6 +20,7 @@
 #define UDP_PORT_HOST_ORDER(addr) ntohs((addr).sin_port)
 
 const __int32 DatagramReceiveBufferBytes = 2048;
+const unsigned DatagramAuthenticationTagBytes = 16;
 const unsigned MAX_REASSEMBLED_USER_MESSAGE = 65536;
 
 struct DatagramHeader {
@@ -84,7 +85,8 @@ struct DatagramHeader {
 #define UDP_HEADER_BYTES 8
 #define TCP_HEADER_BYTES 20
 #define IPV4_UDP_HEADER_BYTES 28
-#define DATAGRAM_PAYLOAD_LIMIT_BYTES (1400 - IPV4_UDP_HEADER_BYTES - sizeof(DatagramHeader))
+// Reserve the authentication tag inside the existing 1400-byte IPv4 packet budget.
+#define DATAGRAM_PAYLOAD_LIMIT_BYTES (1400 - IPV4_UDP_HEADER_BYTES - sizeof(DatagramHeader) - DatagramAuthenticationTagBytes)
 
 enum PacketStatus
 {

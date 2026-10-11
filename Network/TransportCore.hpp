@@ -7,6 +7,7 @@
 
 #include <unordered_map>
 #include <mutex>
+#include "DatagramAuthentication.hpp"
 #include <vector>
 #include "IntrusivePtr.h"
 
@@ -62,6 +63,7 @@ protected:
 	}
 
 public:
+    DatagramAuthentication authentication;
 	virtual PacketStatus openChannel(EndpointInterface* _peer, struct sockaddr_in& distant) = 0;
 
 

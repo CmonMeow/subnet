@@ -77,6 +77,10 @@ LRESULT CALLBACK ChatWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         break;
     case WM_ERASEBKGND:
         return 1;
+    case WM_ACTIVATEAPP:
+        if (auto* changed = reinterpret_cast<std::function<void(bool)>*>(GetPropA(hwnd, "ChatAppFocus")))
+            (*changed)(wParam != 0);
+        break;
     case WM_ACTIVATE:
         if (LOWORD(wParam) == WA_INACTIVE)
         {
