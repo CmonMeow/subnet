@@ -42,7 +42,8 @@ enum ChatLineKind
     CLKPrivate,
     CLKError,
     CLKFile,
-    CLKScreen
+    CLKScreen,
+    CLKImage
 };
 
 struct NetworkChatLine

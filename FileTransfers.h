@@ -2,6 +2,7 @@
 #include "NetworkProtocol.h"
 #include "FileIoQueue.h"
 #include "TransferProgress.h"
+#include "Screenshot.h"
 #include <atomic>
 #include <functional>
 #include <map>
@@ -13,7 +14,7 @@
 class FileTransfers
 {
 public:
-    enum : unsigned char { Offer = 1, Accept, Chunk, Ack, Finish, Done, Cancel };
+    enum : unsigned char { Offer = 1, Accept, Chunk, Ack, Finish, Done, Cancel, ImageOffer, CompressedImageOffer };
     static constexpr unsigned ChunkBytes = 8192;
     // Shared by all uploads, so four recipients cannot multiply the backlog.
     static constexpr unsigned FlightBytes = 1024 * 1024;
@@ -25,6 +26,7 @@ public:
     using Announce = std::function<void(int, const string&)>;
 private:
     struct File {
+        std::shared_ptr<Screenshot> image;
         HANDLE handle = INVALID_HANDLE_VALUE;
         std::wstring temporary;
         std::atomic<int> phase{0}; // 0 active, 1 committing a save, 2 cancelled
@@ -41,7 +43,8 @@ private:
     struct Download {
         string name, token, state = "save";
         unsigned __int64 size = 0, offset = 0, queuedOffset = 0;
-        bool finishing = false;
+        bool finishing = false, image = false, compressed = false;
+        std::shared_ptr<Screenshot> readyImage;
         ULONGLONG touched = 0;
         std::shared_ptr<File> file;
         std::wstring destination;
@@ -141,6 +144,7 @@ private:
         return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name.data(), (int)name.size(), nullptr, 0) > 0;
     }
 public:
+    std::function<void(std::shared_ptr<const Screenshot>)> viewImage;
     FileTransfers(Send s, Notice n, Announce a) : send(std::move(s)), notice(std::move(n)), announce(std::move(a)) {}
     ~FileTransfers() { clear(); }
     static bool localPath(const std::wstring& path) {
@@ -190,6 +194,55 @@ public:
         sources[id] = source;
         return true;
     }
+    bool offerImage(std::shared_ptr<Screenshot> image, const vector<int>& peers) {
+        if (!image || !image->valid()) return false;
+        if (peers.empty()) { notice("No recipients are ready for images.",true); return false; }
+        size_t images=0;for(const auto& entry:sources)if(entry.second->file->image)++images;
+        if(images>=16){notice("Cancel an image offer before pasting another.",true);return false;}
+        auto source=std::make_shared<Source>();source->file=newFile();source->file->image=image;
+        source->name="image";source->expires=GetTickCount64()+600000;source->peers.insert(peers.begin(),peers.end());
+        const string id=randomId();sources[id]=source;
+        if(!io.submit([this,id,image=std::move(image)]() mutable -> FileIoQueue::Completion {
+            auto packed=Screenshot::compress(std::move(image));
+            return [this,id,packed=std::move(packed)] {
+                auto it=sources.find(id);if(it==sources.end())return;
+                if(!packed){sources.erase(it);notice("Could not prepare image.",true);return;}
+                auto& source=*it->second;source.file->image=packed;source.size=packed->bytes.size();
+                source.expires=GetTickCount64()+600000;
+                auto raw=header(packed->compressed()?CompressedImageOffer:ImageOffer,id);
+                raw.putUInt64(source.size);raw.putString(source.name,200);
+                for(auto peer=source.peers.begin();peer!=source.peers.end();)
+                    if(!transmit(*peer,raw))peer=source.peers.erase(peer);else ++peer;
+                if(source.peers.empty()){sources.erase(it);notice("Image recipients are unavailable.",true);return;}
+                announce(-1,id);
+            };
+        })) { sources.erase(id);notice("File I/O queue is busy.",true);return false; }
+        return true;
+    }
+    bool isImage(const Key& key) const {
+        if(key.first==-1){auto it=sources.find(key.second);return it!=sources.end() && !!it->second->file->image;}
+        auto it=downloads.find(key);return it!=downloads.end() && it->second.image;
+    }
+    bool view(const Key& key) {
+        auto it=downloads.find(key);if(it==downloads.end() || !it->second.image)return false;
+        auto& d=it->second;
+        if(d.readyImage){if(viewImage)viewImage(d.readyImage);return true;}
+        if(d.file || d.state!="save")return false;
+        size_t active=0;for(const auto& entry:downloads)if(entry.second.file)++active;
+        if(active>=4){notice("At most four downloads can run.",true);return false;}
+        auto image=Screenshot::allocate((size_t)d.size);
+        if(!image) {
+            // Reclaim cached images, but keep any image currently in the viewer.
+            for(auto& entry:downloads)if(entry.second.readyImage && entry.second.readyImage.use_count()==1) {
+                entry.second.readyImage.reset();entry.second.state="expired";
+            }
+            image=Screenshot::allocate((size_t)d.size);
+        }
+        if(!image){notice("Screenshot memory is full; close images or cancel offers.",true);return false;}
+        d.file=newFile();d.file->image=std::move(image);d.token=randomId();d.offset=d.queuedOffset=0;
+        d.finishing=false;d.touched=GetTickCount64();crypto_generichash_init(&d.hash,nullptr,0,32);
+        control(Accept,key,d.token);return true;
+    }
     std::wstring suggestedName(const Key& key) const {
         auto it = downloads.find(key); if (it == downloads.end() || it->second.file || it->second.state != "save") return L"";
         const auto name = wide(it->second.name);
@@ -212,7 +265,7 @@ public:
         } else {
             auto it = downloads.find(key); if (it == downloads.end()) return "File offer expired";
             const auto& d = it->second; name = d.name; bytes = d.size;
-            state = d.file ? std::to_string(d.size ? (unsigned long long)d.offset * 100 / d.size : 0) + "% "+(d.finishing?string("saving"):TransferProgress::eta(d.progress.remaining(d.size,d.offset,GetTickCount64())))+" cancel" : d.state;
+            state = d.file ? std::to_string(d.size ? (unsigned long long)d.offset * 100 / d.size : 0) + "% "+(d.finishing?string(d.image?"validating":"saving"):TransferProgress::eta(d.progress.remaining(d.size,d.offset,GetTickCount64())))+" cancel" : d.state;
         }
         name = displayName(name); if (name.size() > 25) name = name.substr(0,12) + "..." + name.substr(name.size()-10);
         char size[32];
@@ -221,6 +274,7 @@ public:
         else if (bytes >= 1048576) snprintf(size,sizeof(size),"%.2f MB",(bytes*100/1048576)/100.0);
         else if (bytes >= 1024) snprintf(size,sizeof(size),"%.2f KB",(bytes*100/1024)/100.0);
         else snprintf(size,sizeof(size),"%llu B",bytes);
+        if (isImage(key)) return "[image] (" + string(size) + ") [" + (state=="save" || state=="view" ? "view" : state) + "]";
         return name + " (" + size + ") [" + state + "]";
     }
     void withdraw(const string& id) {
@@ -233,7 +287,7 @@ public:
     void cancel(const Key& key) { auto it = downloads.find(key); if (it != downloads.end() && it->second.file) failDownload(key, it->second, "cancelled"); }
     bool accept(const Key& key, const std::wstring& destination) {
         auto it = downloads.find(key);
-        if (it == downloads.end() || it->second.file || it->second.state != "save") return false;
+        if (it == downloads.end() || it->second.file || it->second.image || it->second.state != "save") return false;
         size_t active = 0; for (const auto& entry : downloads) if (entry.second.file) ++active;
         if (active >= 4 || !localPath(destination)) {
             notice("Choose a new local filename; at most four downloads can run.", true); return false;
@@ -263,10 +317,17 @@ public:
         unsigned char type; string id, token;
         if (!raw.getUInt8(type) || !raw.getString(id,32) || !validId(id) || !raw.getString(token,32)) return;
         const Key key(peer,id); const auto now = GetTickCount64();
-        if (type == Offer) {
+        if (type == Offer || type == ImageOffer || type == CompressedImageOffer) {
             unsigned __int64 size; string name;
             if (!token.empty() || !raw.getUInt64(size) || size > MaxFileBytes || !raw.getString(name,200) || !validName(name) || !raw.fullyRead() || downloads.count(key)) return;
-            Download d; d.name = name; d.size = size; d.touched = now; downloads.emplace(key, std::move(d)); announce(peer,id); return;
+            const bool image=type!=Offer;
+            if(image) {
+                if(size<=Screenshot::HeaderBytes || size>Screenshot::MaxBytes)return;
+                size_t total=0,fromPeer=0;
+                for(const auto& entry:downloads)if(entry.second.image){++total;if(entry.first.first==peer)++fromPeer;}
+                if(total>=256 || fromPeer>=64)return;
+            }
+            Download d; d.image = image; d.compressed=type==CompressedImageOffer; d.name = name; d.size = size; d.touched = now; downloads.emplace(key, std::move(d)); announce(peer,id); return;
         }
         if (type == Cancel && token.empty() && raw.fullyRead()) {
             discardControls(key);
@@ -310,9 +371,13 @@ public:
             unsigned __int64 offset; vector<unsigned char> data;
             if (!raw.getUInt64(offset) || !raw.getBytes(data,ChunkBytes) || data.empty() || !raw.fullyRead() || offset != d.queuedOffset || data.size() > d.size-d.queuedOffset) { failDownload(key,d,"invalid chunk"); return; }
             const auto count=data.size(); auto file=d.file;
-            if (!io.submit([this,file,key,token,data=std::move(data)]() mutable -> FileIoQueue::Completion {
+            if (!io.submit([this,file,key,token,offset,data=std::move(data)]() mutable -> FileIoQueue::Completion {
                 DWORD written=0;
-                bool ok=file->phase==0 && WriteFile(file->handle,data.data(),(DWORD)data.size(),&written,nullptr) && written==data.size();
+                bool ok=file->phase==0;
+                if(ok && file->image) {
+                    ok=offset<=file->image->bytes.size() && data.size()<=file->image->bytes.size()-offset;
+                    if(ok)memcpy(file->image->bytes.data()+(size_t)offset,data.data(),data.size());
+                } else if(ok)ok=WriteFile(file->handle,data.data(),(DWORD)data.size(),&written,nullptr) && written==data.size();
                 return [this,key,token,ok,data=std::move(data)] {
                     auto it=downloads.find(key);if(it==downloads.end()||!it->second.file||it->second.token!=token)return;
                     auto& d=it->second;
@@ -326,6 +391,22 @@ public:
             if (!raw.get(digest,32) || !raw.fullyRead() || d.offset!=d.size) { failDownload(key,d,"incomplete transfer"); return; }
             auto hash=d.hash; crypto_generichash_final(&hash,actual,32);
             if(sodium_memcmp(digest,actual,32)){failDownload(key,d,"integrity error");return;}
+            if(d.image) {
+                auto file=d.file;const bool compressed=d.compressed;
+                if(!io.submit([this,file,key,token,compressed]() -> FileIoQueue::Completion {
+                    if(file->phase!=0)return {};
+                    auto image=Screenshot::expand(file->image,compressed);
+                    return [this,key,token,image=std::move(image)] {
+                        auto it=downloads.find(key);
+                        if(it==downloads.end() || !it->second.file || it->second.token!=token)return;
+                        auto& d=it->second;
+                        if(!image){failDownload(key,d,"invalid image or screenshot memory exhausted");return;}
+                        d.readyImage=image;d.file.reset();d.state="view";d.touched=GetTickCount64();control(Done,key,token);
+                        if(viewImage)viewImage(d.readyImage);
+                    };
+                })) {failDownload(key,d,"file I/O queue is busy");return;}
+                d.finishing=true;d.touched=now;return;
+            }
             auto file=d.file;auto destination=d.destination;
             if(!io.submit([this,file,destination,key,token]() -> FileIoQueue::Completion {
                 string error;
@@ -381,7 +462,11 @@ public:
             const auto offset=u.offset;const unsigned count=(unsigned)(std::min)((unsigned __int64)FlightBytes,u.source->size-offset);
             u.reading=io.submit([this,file,key,token,offset,count]() -> FileIoQueue::Completion {
                 vector<unsigned char> bytes(count);LARGE_INTEGER pos;pos.QuadPart=offset;DWORD read=0;
-                bool ok=SetFilePointerEx(file->handle,pos,nullptr,FILE_BEGIN)&&ReadFile(file->handle,bytes.data(),count,&read,nullptr)&&read==count;
+                bool ok;
+                if(file->image) {
+                    ok=offset<=file->image->bytes.size() && count<=file->image->bytes.size()-offset;
+                    if(ok)memcpy(bytes.data(),file->image->bytes.data()+(size_t)offset,count);
+                } else ok=SetFilePointerEx(file->handle,pos,nullptr,FILE_BEGIN)&&ReadFile(file->handle,bytes.data(),count,&read,nullptr)&&read==count;
                 return [this,key,token,ok,bytes=std::move(bytes)]() mutable {
                     auto it=uploads.find(key);if(it==uploads.end()||it->second.token!=token)return;
                     if(!ok){control(Cancel,key,token);notice("File read failed.",true);uploads.erase(it);return;}

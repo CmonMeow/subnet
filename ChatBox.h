@@ -30,7 +30,7 @@ class cChatBox
     };
 
     string historyText(const cNetworkRuntime& network,const NetworkChatLine& line) const {
-        if(line.kind==CLKFile)return FitChatText(network.fileLabel(line.fileSender,line.fileId),(int)boxWidth()-24);
+        if(line.kind==CLKFile || line.kind==CLKImage)return FitChatText(network.fileLabel(line.fileSender,line.fileId),(int)boxWidth()-24);
         if(line.kind==CLKScreen)return FitChatText(network.screenLabel(line.fileSender,line.fileId),(int)boxWidth()-24);
         return line.text;
     }
@@ -164,6 +164,11 @@ class cChatBox
             for (const auto& path : paths) network.offerFile(path);
             if (count > 8) network.showNotice("Paste at most eight files at once.", true);
             else if (paths.empty()) network.showNotice("No readable file paths on the clipboard.", true);
+            return;
+        }
+        if (IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_DIBV5))
+        {
+            network.offerScreenshot();
             return;
         }
         string text = SanitiseChatText(ClipboardText());
@@ -359,7 +364,7 @@ class cChatBox
                     if(mouseX < BOX_X+8.f+ChatTextWidth(label)) { network.clickScreen(lines[i].fileSender,lines[i].fileId); return true; }
                     continue;
                 }
-                if (lines[i].kind == CLKFile)
+                if (lines[i].kind == CLKFile || lines[i].kind == CLKImage)
                 {
                     const string label = FitChatText(network.fileLabel(lines[i].fileSender,lines[i].fileId),(int)boxWidth()-24);
                     if (mouseX < BOX_X + 8.f + ChatTextWidth(label))
@@ -769,10 +774,10 @@ public:
                 QueueChatText(label.c_str(),x+8.f,textY-(float)(i-first)*lineHeight,.25f,1.f,.42f);
                 continue;
             }
-            if (lines[i].kind == CLKFile)
+            if (lines[i].kind == CLKFile || lines[i].kind == CLKImage)
             {
                 const string label = FitChatText(network.fileLabel(lines[i].fileSender,lines[i].fileId),(int)width-24);
-                QueueChatText(label.c_str(),x+8.f,textY-(float)(i-first)*lineHeight,1.f,.30f,.26f);
+                QueueChatText(label.c_str(),x+8.f,textY-(float)(i-first)*lineHeight,1.f,lines[i].kind==CLKImage ? .92f : .30f,lines[i].kind==CLKImage ? .22f : .26f);
                 continue;
             }
             DrawChatLineWithLinks(lines[i].text, x + 8.f, textY - (float)(i - first) * lineHeight, r, g, b);

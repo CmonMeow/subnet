@@ -61,7 +61,7 @@
     </ClCompile>
     <Link>
       <AdditionalOptions>/ignore:4099 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalDependencies>ole32.lib;oleaut32.lib;shlwapi.lib;version.lib;comdlg32.lib;$(ProjectDir)third_party\webview2\lib\x64\WebView2LoaderStatic.lib;ws2_32.lib;winmm.lib;user32.lib;shell32.lib;opengl32.lib;gdi32.lib;$(ProjectDir)third_party\opus\lib\x64\Release\opus.lib;$(ProjectDir)third_party\libsodium\lib\x64\Release\libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Cabinet.lib;ole32.lib;oleaut32.lib;shlwapi.lib;version.lib;comdlg32.lib;$(ProjectDir)third_party\webview2\lib\x64\WebView2LoaderStatic.lib;ws2_32.lib;winmm.lib;user32.lib;shell32.lib;opengl32.lib;gdi32.lib;$(ProjectDir)third_party\opus\lib\x64\Release\opus.lib;$(ProjectDir)third_party\libsodium\lib\x64\Release\libsodium.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
       <ProgramDatabaseFile>$(IntDir)$(ProjectName).pdb</ProgramDatabaseFile>
       <ImportLibrary>$(IntDir)$(ProjectName).lib</ImportLibrary>
@@ -145,6 +145,8 @@
     <ClInclude Include="resource.h" />
     <Image Include="Icon.ico" />
     <ClInclude Include="ChatBackground.h" />
+    <ClInclude Include="Screenshot.h" />
+    <ClInclude Include="ImageViewer.h" />
     <None Include="ChatBackground.bits" />
     <None Include="cursor_white.cur" />
     <None Include="cursor_cyan.cur" />

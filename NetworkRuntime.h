@@ -3,6 +3,7 @@
 #include "ChatCommands.h"
 #include "FileTransfers.h"
 #include "FileSaveDialog.h"
+#include "ImageViewer.h"
 #include "ScreenSignaling.h"
 
 class cNetworkRuntime
@@ -16,6 +17,7 @@ class cNetworkRuntime
     FileTransfers _files;
     ULONGLONG _voiceActiveUntil = 0;
     FileSaveDialog _fileDialog;
+    ImageViewer _imageViewer;
     struct FileBudget { double bytes = 32768; double packets = 32; ULONGLONG time = GetTickCount64(); };
     struct RelayedFile { int from; vector<unsigned char> cipher; };
     std::map<int, std::deque<RelayedFile>> _fileRelay;
@@ -119,8 +121,9 @@ class cNetworkRuntime
         } else receiveFilePayload(sender,cipher);
     }
     void announceFile(int from, const string& id) {
-        addChatLine(from < 0 ? "You offered a file:" : playerDisplayName(from) + " offered a file:",CLKSystem);
-        NetworkChatLine line; line.kind = CLKFile; line.fileSender = from; line.fileId = id;
+        const bool image=_files.isImage({from,id});
+        addChatLine((from < 0 ? string("You") : playerDisplayName(from)) + (image ? " offered an image:" : " offered a file:"),CLKSystem);
+        NetworkChatLine line; line.kind = image ? CLKImage : CLKFile; line.fileSender = from; line.fileId = id;
         line.historyId = ++_nextChatLineId; GetLocalTime(&line.receivedAt);
         _chatLines.push_back(line);
         while (_chatLines.size() > CHAT_MAX_HISTORY_LINES) _chatLines.erase(_chatLines.begin());
@@ -1306,6 +1309,9 @@ public:
           _privateChatKeyReady(false)
     {
         sodium_init();
+        _files.viewImage=[this](std::shared_ptr<const Screenshot> image) {
+            if(!_imageViewer.show(std::move(image)))showNotice("Could not open image.",true);
+        };
         ensurePrivateChatKey();
 
     }
@@ -1600,6 +1606,15 @@ public:
             if (person.first != localPlayerId() && _privateChatKeys.count(person.first)) peers.push_back(person.first);
         _files.offer(path,peers);
     }
+    void offerScreenshot() {
+        vector<int> peers;
+        if(isHost() || clientReady())for(const auto& person:participants())
+            if(person.first!=localPlayerId() && _privateChatKeys.count(person.first))peers.push_back(person.first);
+        if(peers.empty()){showNotice("No recipients are ready for images.",true);return;}
+        auto image=Screenshot::clipboard();
+        if(!image){showNotice("Cannot paste image: unsupported format, too large, or screenshot memory is full.",true);return;}
+        _files.offerImage(std::move(image),peers);
+    }
     unsigned short hostingPort() const { return _hostingPort; }
     std::function<void()> browseHosts;
     std::function<void(int,const string&)> openScreen;
@@ -1617,6 +1632,7 @@ public:
         if (from == -1) { _files.withdraw(id); return; }
         const FileTransfers::Key key(from,id);
         if (_files.active(key)) { _files.cancel(key); return; }
+        if(_files.isImage(key)){if(!_files.view(key))showNotice("This image is no longer available.",true);return;}
         const auto name = _files.suggestedName(key);
         if (name.empty()) { showNotice("This file offer is no longer available.",true); return; }
         if (!_fileDialog.start(from,id,name)) showNotice("A save dialog is already open.",true);
@@ -1729,7 +1745,7 @@ public:
         if (!_client && !_server) return false;
         if(_disconnectDeadline)return true;
         _screens.clear();
-        _files.clear(); _fileRelay.clear(); _fileRelayBytes = 0; _peerBudgets.clear(); _voiceActiveUntil = 0;
+        _imageViewer.clear(); _files.clear(); _fileRelay.clear(); _fileRelayBytes = 0; _peerBudgets.clear(); _voiceActiveUntil = 0;
         _transportConnecting = false;
         _connectDeadline = 0;
         if (_client && !_remoteEnded) sendRawControlFromClient(NAMTDisconnect);
