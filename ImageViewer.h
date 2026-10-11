@@ -128,7 +128,8 @@ public:
         if(!_window){_image.reset();return false;}
         SetWindowTextW(_window,L"Image - fit (double-click for 100%)");
         MONITORINFO monitor={sizeof(MONITORINFO)};
-        GetMonitorInfoW(MonitorFromWindow(_window,MONITOR_DEFAULTTONEAREST),&monitor);
+        if(!GetMonitorInfoW(MonitorFromWindow(_window,MONITOR_DEFAULTTONEAREST),&monitor))
+            monitor.rcWork={0,0,GetSystemMetrics(SM_CXSCREEN),GetSystemMetrics(SM_CYSCREEN)};
         const RECT work=monitor.rcWork;
         const int width=Screenshot::read32(_image->bytes.data()+4),height=Screenshot::read32(_image->bytes.data()+8);
         const int availableWidth=(std::max)(1,int(work.right-work.left));

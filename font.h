@@ -5,18 +5,27 @@
 
 #define Glyphs serif
 
+int ChatCharacterWidth(unsigned char c)
+{
+    return c == ' ' ? 6 : c == '\t' ? 18 : (c >= 33 && c <= 127 ? 12 : 0);
+}
+
 int ChatTextWidth(const string& text)
 {
     int width = 0;
-    for (unsigned char c : text) width += c == ' ' ? 6 : c == '\t' ? 18 : (c >= 33 && c <= 127 ? 12 : 0);
+    for (unsigned char c : text) width += ChatCharacterWidth(c);
     return width;
 }
 
 string FitChatText(string text, int pixels)
 {
-    if (ChatTextWidth(text) <= pixels) return text;
+    int width = ChatTextWidth(text);
+    if (width <= pixels) return text;
     if (pixels < 36) return string();
-    while (!text.empty() && ChatTextWidth(text) + 36 > pixels) text.pop_back();
+    while (!text.empty() && width + 36 > pixels) {
+        width -= ChatCharacterWidth(text.back());
+        text.pop_back();
+    }
     return text + "...";
 }
 

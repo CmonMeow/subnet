@@ -45,7 +45,7 @@ class cChatBox
         row=(std::max)(0,(std::min)(row,(int)(last-first)-1));
         const auto& line=lines[first+row];auto text=historyText(network,line);
         int x=input.mouse.x-(BOX_X+8);size_t column=0;
-        while(column<text.size()) {int width=ChatTextWidth(text.substr(column,1));if(x<width/2)break;x-=width;++column;}
+        while(column<text.size()) {int width=ChatCharacterWidth(text[column]);if(x<width/2)break;x-=width;++column;}
         point={line.historyId,column};return true;
     }
     void drawTimestamp(const cNetworkRuntime& network,bool focused) {
@@ -76,6 +76,7 @@ class cChatBox
         CloseClipboard();
     }
     void drawSelection(const cNetworkRuntime& network,const NetworkChatLine& line,float y) {
+        if(!_selection.selected())return;
         const auto text=historyText(network,line);size_t first,last;
         if(!_selection.range(line.historyId,text.size(),first,last)||first==last)return;
         const float left=BOX_X+8.f+ChatTextWidth(text.substr(0,first));
@@ -268,7 +269,7 @@ class cChatBox
                 {
                     ++end;
                 }
-                if (character >= found && character <= end)
+                if (character >= found && character < end)
                 {
                     url = line.substr(found, end - found);
                     while (!url.empty() && (url[url.size() - 1] == '.' || url[url.size() - 1] == ',' || url[url.size() - 1] == ')' || url[url.size() - 1] == ';'))
@@ -378,7 +379,7 @@ class cChatBox
                 float remainingX = mouseX - (BOX_X + 8.f);
                 while (character < lines[i].text.size())
                 {
-                    int advance = lines[i].text[character] == ' ' ? 6 : 12;
+                    int advance = ChatCharacterWidth(lines[i].text[character]);
                     if (remainingX < advance) break;
                     remainingX -= advance;
                     ++character;
