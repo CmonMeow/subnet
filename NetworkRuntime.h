@@ -127,6 +127,7 @@ class cNetworkRuntime
         line.historyId = ++_nextChatLineId; GetLocalTime(&line.receivedAt);
         _chatLines.push_back(line);
         while (_chatLines.size() > CHAT_MAX_HISTORY_LINES) _chatLines.erase(_chatLines.begin());
+        if(from >= 0 && activityReceived) activityReceived();
     }
     bool _remoteEnded = false;
     unsigned __int32 _rosterRevision = 0;
@@ -602,7 +603,7 @@ class cNetworkRuntime
             if (decryptPrivateText(privateCipher, privateText))
             {
                 addChatLine(string("(private) ") + privateName + ": " + privateText, CLKPrivate);
-                if(privateFrom != localPlayerId() && messageReceived) messageReceived();
+                if(privateFrom != localPlayerId() && activityReceived) activityReceived();
             }
             return;
         }
@@ -613,8 +614,13 @@ class cNetworkRuntime
             _remoteEnded = true;
             return;
         }
-        if (ParseAppRawString(message, messageSize, NAMTConnect, text, CHAT_MAX_LINE_CHARS) ||
-            ParseAppRawString(message, messageSize, NAMTDisconnect, text, CHAT_MAX_LINE_CHARS))
+        if (ParseAppRawString(message, messageSize, NAMTConnect, text, CHAT_MAX_LINE_CHARS))
+        {
+            addChatLine(text, CLKSystem);
+            if(activityReceived) activityReceived();
+            return;
+        }
+        if (ParseAppRawString(message, messageSize, NAMTDisconnect, text, CHAT_MAX_LINE_CHARS))
         {
             addChatLine(text, CLKSystem);
             return;
@@ -839,6 +845,7 @@ class cNetworkRuntime
         std::ostringstream status;
         status << "system: " << playerDisplayName(player) << " joined";
         addChatLine(status.str(), CLKSystem);
+        if(activityReceived) activityReceived();
         sendRawStringFromServerToAll(NAMTConnect, status.str(), CHAT_MAX_LINE_CHARS);
     }
 
@@ -1115,7 +1122,7 @@ class cNetworkRuntime
             if (decryptPrivateText(cipher, privateText))
             {
                 addChatLine(fromName + ": " + privateText, CLKPrivate);
-                if(from != localPlayerId() && messageReceived) messageReceived();
+                if(from != localPlayerId() && activityReceived) activityReceived();
             }
             return;
         }
@@ -1520,6 +1527,7 @@ public:
 
     string statusNotice() const {return GetTickCount64() < _statusNoticeUntil ? _statusNotice : string();}
     std::function<void()> messageReceived;
+    std::function<void()> activityReceived;
     void showNotice(const string& text, bool error = false) { addChatLine(text, error ? CLKError : CLKSystem); }
 
     bool clientReady() const { return !_disconnectDeadline && _client && _localPlayerId >= 0; }

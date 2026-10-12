@@ -24,14 +24,16 @@ int wmain(int argc,wchar_t** argv) {
     }
     if(argc!=2){puts("Usage: PublishUpdate --init | release-number");return 1;}
     wchar_t* end=nullptr;uint64_t version=_wcstoui64(argv[1],&end,10);if(!version||!end||*end)return 1;
+    // Keep the exact file locked through resource validation and signing.
+    std::vector<unsigned char> protectedKey,image;Updates::File executableLock;
+    if(!Updates::readFile(L"bin\\oi.exe",image,Updates::MaxBytes,&executableLock))return 1;
     HMODULE module=LoadLibraryExW(L"bin\\oi.exe",nullptr,LOAD_LIBRARY_AS_DATAFILE|LOAD_LIBRARY_AS_IMAGE_RESOURCE);
     if(!module)return 1;
     HRSRC resource=FindResourceW(module,MAKEINTRESOURCEW(202),MAKEINTRESOURCEW(10));
     const auto* embedded=resource?(const uint32_t*)LockResource(LoadResource(module,resource)):nullptr;
     bool correct=embedded && SizeofResource(module,resource)==4 && *embedded==version;
     FreeLibrary(module);if(!correct){puts("Executable release does not match requested manifest version.");return 1;}
-    std::vector<unsigned char> protectedKey,image;
-    if(!Updates::readFile(L"private\\update.key",protectedKey,4096)||!Updates::readFile(L"bin\\oi.exe",image))return 1;
+    if(!Updates::readFile(L"private\\update.key",protectedKey,4096))return 1;
     DATA_BLOB input={(DWORD)protectedKey.size(),protectedKey.data()},key={};
     if(!CryptUnprotectData(&input,nullptr,nullptr,nullptr,nullptr,CRYPTPROTECT_UI_FORBIDDEN,&key))return 1;
     unsigned char pk[32]={};bool ok=key.cbData==64;

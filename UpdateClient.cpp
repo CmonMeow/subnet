@@ -79,7 +79,8 @@ bool UpdateClient::prompt(HWND window) {
     if(MessageBoxW(window,L"An oi update is ready. Restart now to install it?",L"Update available",MB_YESNO|MB_ICONINFORMATION)!=IDYES)return false;
     Updates::Manifest manifest;std::vector<unsigned char> image;
     const auto file=stage+L"\\oi.exe";
-    if(!Updates::loadManifest(stage+L"\\oi.update",manifest)||manifest.release<=UpdateRelease||!Updates::readFile(file,image)||!Updates::matches(manifest,image))return false;
+    Updates::File verified;
+    if(!Updates::loadManifest(stage+L"\\oi.update",manifest)||manifest.release<=UpdateRelease||!Updates::readFile(file,image,Updates::MaxBytes,&verified)||!Updates::matches(manifest,image))return false;
     installing=launch(file,L"--apply-update "+std::to_wstring(GetCurrentProcessId())+L" "+quote(Updates::executable()));
     if(!installing)MessageBoxW(window,L"Could not start the update. Your current version is unchanged.",L"Update failed",MB_OK|MB_ICONERROR);
     return installing;
@@ -106,12 +107,18 @@ int UpdateClient::startup() {
         if(!same){CloseHandle(process);return 2;}DWORD result=WaitForSingleObject(process,120000);CloseHandle(process);if(result!=WAIT_OBJECT_0)return 2;}
     else if(GetLastError()!=ERROR_INVALID_PARAMETER)return 2;
     const auto backup=target+L".previous";
-    // Existing backup is retained rather than overwritten if it is not a regular file.
+    // Do not remove the existing backup until replacement succeeds.
     DWORD attr=GetFileAttributesW(backup.c_str());
-    if(attr!=INVALID_FILE_ATTRIBUTES && (!plainFile(backup)||!DeleteFileW(backup.c_str())))return 2;
+    if(attr!=INVALID_FILE_ATTRIBUTES && !plainFile(backup))return 2;
     const auto ready=selfFolder+L"\\oi.ready";
-    if(!CopyFileW(self.c_str(),ready.c_str(),TRUE))return 2;
-    if(!ReplaceFileW(target.c_str(),ready.c_str(),backup.c_str(),0,nullptr,nullptr)){DeleteFileW(ready.c_str());return 2;}
+    const auto temporaryBackup=selfFolder+L"\\oi.previous";
+    if(!Updates::writeNew(ready,image.data(),(DWORD)image.size()))return 2;
+    if(!ReplaceFileW(target.c_str(),ready.c_str(),temporaryBackup.c_str(),0,nullptr,nullptr)){DeleteFileW(ready.c_str());return 2;}
+    if(!MoveFileExW(temporaryBackup.c_str(),backup.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){
+        if(!ReplaceFileW(target.c_str(),temporaryBackup.c_str(),nullptr,0,nullptr,nullptr))
+            MessageBoxW(nullptr,L"Could not finish the update. The previous executable remains in the update folder as oi.previous.",L"Update failed",MB_OK|MB_ICONERROR);
+        return 2;
+    }
     if(!launch(target,L"--cleanup-update "+quote(selfFolder))){
         if(!ReplaceFileW(target.c_str(),backup.c_str(),nullptr,0,nullptr,nullptr))
             MessageBoxW(nullptr,L"Could not restart or restore oi. Your previous executable is saved with the .previous suffix.",L"Update failed",MB_OK|MB_ICONERROR);

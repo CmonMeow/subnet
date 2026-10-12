@@ -5,7 +5,7 @@
 // TCP validates the return address. Only a fixed request and one immutable release
 // are served; no paths or allocation sizes come from the peer.
 class UpdateServer {
-    struct Peer {SOCKET socket=INVALID_SOCKET;size_t sent=0;ULONGLONG started=0;bool accepted=false;};
+    struct Peer {SOCKET socket=INVALID_SOCKET;size_t sent=0;ULONGLONG started=0,progress=0;bool accepted=false;};
     SOCKET listener=INVALID_SOCKET;
     std::array<Peer,16> peers{};
     std::vector<unsigned char> release;
@@ -34,21 +34,21 @@ public:
         for(unsigned i=0;i<16;++i){
             SOCKET s=accept(listener,nullptr,nullptr);if(s==INVALID_SOCKET)break;
             bool kept=false;u_long mode=1;
-            if(!ioctlsocket(s,FIONBIO,&mode))for(auto& p:peers)if(p.socket==INVALID_SOCKET){p={s,0,now,false};kept=true;break;}
+            if(!ioctlsocket(s,FIONBIO,&mode))for(auto& p:peers)if(p.socket==INVALID_SOCKET){p={s,0,now,now,false};kept=true;break;}
             if(!kept)closesocket(s);
         }
         for(auto& p:peers){
             if(p.socket==INVALID_SOCKET)continue;
-            if(now-p.started>(p.accepted?120000u:5000u)){close(p);continue;}
+            if(now-p.started>(p.accepted?120000u:5000u) || now-p.progress>10000){close(p);continue;}
             if(!p.accepted){
                 char request=0;int n=recv(p.socket,&request,1,0);
-                if(n==1 && request=='U')p.accepted=true;
+                if(n==1 && request=='U'){p.accepted=true;p.progress=now;}
                 else if(n==0 || n>0 || WSAGetLastError()!=WSAEWOULDBLOCK){close(p);continue;}
             }
             if(!p.accepted || budget>=8*1024*1024)continue;
             const int count=(int)(std::min)(size_t(65536),release.size()-p.sent);
             int n=send(p.socket,(const char*)release.data()+p.sent,count,0);
-            if(n>0){p.sent+=n;budget+=n;if(p.sent==release.size())close(p);}
+            if(n>0){p.progress=now;p.sent+=n;budget+=n;if(p.sent==release.size())close(p);}
             else if(n==0 || WSAGetLastError()!=WSAEWOULDBLOCK)close(p);
         }
     }

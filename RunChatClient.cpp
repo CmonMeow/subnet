@@ -234,6 +234,10 @@ void RunChatClient(HWND hWnd)
         if(chimeCooldown.ready(now) && voiceChat.messageChime())
             chimeCooldown.played(now);
     };
+    network.activityReceived = [&] {
+        updateChimeFocus();
+        if(!chimeCooldown.focused) voiceChat.messageChime();
+    };
     ParticipantVolume userVolumes;
     ScreenShare screenShare(hWnd,
         [&](const ScreenSignaling::Event& event){ network.sendScreenEvent(event); },
@@ -450,6 +454,7 @@ void RunChatClient(HWND hWnd)
     if(commandMenu) DestroyMenu(commandMenu);
     RemovePropA(hWnd, "ChatAppFocus");
     network.messageReceived={};
+    network.activityReceived={};
     network.openScreen={};
     DragAcceptFiles(hWnd,FALSE);
     ReleaseDC(hWnd, dc);

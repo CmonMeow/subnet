@@ -27,14 +27,23 @@ inline std::wstring executable() {
     return n && n<32768 ? std::wstring(path,n) : std::wstring();
 }
 inline std::wstring folder(const std::wstring& path) {return path.substr(0,path.find_last_of(L"\\/"));}
-inline bool readFile(const std::wstring& path,std::vector<unsigned char>& bytes,uint64_t limit=MaxBytes) {
-    HANDLE file=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+struct File {
+    HANDLE handle=INVALID_HANDLE_VALUE;
+    File()=default;
+    File(const File&)=delete;
+    File& operator=(const File&)=delete;
+    ~File(){if(handle!=INVALID_HANDLE_VALUE)CloseHandle(handle);}
+};
+inline bool readFile(const std::wstring& path,std::vector<unsigned char>& bytes,uint64_t limit=MaxBytes,File* retained=nullptr) {
+    File owned;
+    HANDLE file=owned.handle=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
     if(file==INVALID_HANDLE_VALUE)return false;
     BY_HANDLE_FILE_INFORMATION info={};LARGE_INTEGER size={};
     bool ok=GetFileInformationByHandle(file,&info) && !(info.dwFileAttributes&(FILE_ATTRIBUTE_REPARSE_POINT|FILE_ATTRIBUTE_DIRECTORY)) &&
         GetFileSizeEx(file,&size) && size.QuadPart>0 && uint64_t(size.QuadPart)<=limit;
     if(ok){bytes.resize(size_t(size.QuadPart));DWORD n=0;ok=ReadFile(file,bytes.data(),(DWORD)bytes.size(),&n,nullptr)&&n==bytes.size();}
-    CloseHandle(file);if(!ok)bytes.clear();return ok;
+    if(ok && retained){retained->handle=owned.handle;owned.handle=INVALID_HANDLE_VALUE;}
+    if(!ok)bytes.clear();return ok;
 }
 inline bool loadManifest(const std::wstring& path,Manifest& m) {
     std::vector<unsigned char> bytes;
