@@ -315,7 +315,7 @@ class cNetworkRuntime
             return false;
         }
         NetPacket raw(message + sizeof(ChatPacketPrefix), messageSize - (__int32)sizeof(ChatPacketPrefix));
-        return raw.getInt32(target) && raw.getString(cipher, 255) && raw.fullyRead();
+        return raw.getInt32(target) && raw.getLongString(cipher, CHAT_MAX_MESSAGE_CHARS + crypto_box_SEALBYTES) && raw.fullyRead();
     }
 
     bool decodePrivateChatForClient(const char* message, __int32 messageSize, __int32& from, string& name, string& cipher)
@@ -330,7 +330,7 @@ class cNetworkRuntime
             return false;
         }
         NetPacket raw(message + sizeof(ChatPacketPrefix), messageSize - (__int32)sizeof(ChatPacketPrefix));
-        return raw.getInt32(from) && raw.getString(name, 48) && raw.getString(cipher, 255) && raw.fullyRead();
+        return raw.getInt32(from) && raw.getString(name, 48) && raw.getLongString(cipher, CHAT_MAX_MESSAGE_CHARS + crypto_box_SEALBYTES) && raw.fullyRead();
     }
 
     void sendPrivateChatToClient(__int32 to, __int32 from, const string& fromName, const string& cipher)
@@ -338,7 +338,7 @@ class cNetworkRuntime
         NetPacket raw;
         raw.putInt32(from);
         raw.putString(fromName, 48);
-        raw.putString(cipher, 255);
+        raw.putLongString(cipher, CHAT_MAX_MESSAGE_CHARS + crypto_box_SEALBYTES);
         sendRawFromServer(to, NAMTPrivateChat, raw, (DeliveryOptions)(DeliveryGuaranteed | DeliveryHighPriority));
     }
 
@@ -492,7 +492,7 @@ class cNetworkRuntime
         if(!_server||_endingPeers.count(player))return;
         auto crypto=_serverCrypto.find(player);
         if(crypto!=_serverCrypto.end()&&crypto->second.ready()){
-            NetPacket raw;raw.putString(text,CHAT_MAX_LINE_CHARS);
+            NetPacket raw;raw.putLongString(text,CHAT_MAX_LINE_CHARS);
             sendRawFromServer(player,NAMTSessionEnd,raw,(DeliveryOptions)(DeliveryGuaranteed|DeliveryHighPriority));
             _endingPeers.emplace(player,EndingPeer{GetTickCount64()+250,reason,text});
         }else _server->DisconnectPeer(player,reason,text);
@@ -918,14 +918,14 @@ class cNetworkRuntime
     void sendRawStringFromClient(ChatPacketKind type, const string& message, size_t maxLength)
     {
         NetPacket raw;
-        raw.putString(message, maxLength);
+        raw.putLongString(message, maxLength);
         sendRawFromClient(type, raw, (DeliveryOptions)(DeliveryGuaranteed | DeliveryHighPriority));
     }
 
     void sendRawStringFromServer(__int32 player, ChatPacketKind type, const string& message, size_t maxLength)
     {
         NetPacket raw;
-        raw.putString(message, maxLength);
+        raw.putLongString(message, maxLength);
         sendRawFromServer(player, type, raw, (DeliveryOptions)(DeliveryGuaranteed | DeliveryHighPriority));
     }
 
@@ -1146,7 +1146,7 @@ class cNetworkRuntime
         {
             NetPacket raw;
             raw.putInt32(target);
-            raw.putString(cipher, 255);
+            raw.putLongString(cipher, CHAT_MAX_MESSAGE_CHARS + crypto_box_SEALBYTES);
             sendRawFromClient(NAMTPrivateChat, raw, (DeliveryOptions)(DeliveryGuaranteed | DeliveryHighPriority));
             addChatLine(string(">") + playerDisplayName(target) + ": " + text, CLKPrivate);
             return true;

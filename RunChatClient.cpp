@@ -11,6 +11,7 @@
 #include "NetworkRuntime.h"
 #include "font.h"
 #include "ChatBackground.h"
+#include "UpdateClient.h"
 static int ChatCursorResource = IDC_POINTER_CYAN;
 
 static void QueueChatRect(float minX,float minY,float maxX,float maxY,float r,float g,float b,float a,bool outline)
@@ -206,6 +207,7 @@ void RunChatClient(HWND hWnd)
     cNetworkRuntime network(hWnd, &settings);
     if (settings.dedicated()) network.hostOnPort();
     HostDirectoryClient directory(HostDirectoryClient::configuredAddress(DEFAULT_NETWORK_ADDRESS), APP_PROTOCOL_VERSION);
+    UpdateClient updater(HostDirectoryClient::configuredAddress(DEFAULT_NETWORK_ADDRESS));
     HostBrowser browser;
     cChatBox chatBox;
     string previousPublishStatus;
@@ -227,6 +229,7 @@ void RunChatClient(HWND hWnd)
     };
     network.messageReceived = [&] {
         updateChimeFocus();
+
         const auto now = GetTickCount64();
         if(chimeCooldown.ready(now) && voiceChat.messageChime())
             chimeCooldown.played(now);
@@ -253,6 +256,7 @@ void RunChatClient(HWND hWnd)
         if(ticking || App.quit) return;
         ticking = true;
         updateChimeFocus();
+        if(!modal && !network.hasConnection() && GetForegroundWindow()==hWnd && updater.prompt(hWnd)){App.quit=true;ticking=false;return;}
         network.update();
         directory.update(network.isHost(),network.hostingPort(),(unsigned)network.participants().size(),settings.hostName);
         if(!modal) browser.update(network,directory);

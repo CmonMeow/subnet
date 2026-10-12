@@ -90,6 +90,7 @@
       <WholeProgramOptimization>false</WholeProgramOptimization>
     </ClCompile>
     <ClCompile Include="MainVoiceClient.cpp" />
+    <ClCompile Include="UpdateClient.cpp"><ExceptionHandling>Sync</ExceptionHandling></ClCompile>
     <ClCompile Include="ScreenShare.cpp" />
     <ClCompile Include="RunChatClient.cpp" />
     <ClCompile Include="sysdef.cpp" />
@@ -146,6 +147,10 @@
     <ClInclude Include="resource.h" />
     <Image Include="Icon.ico" />
     <ClInclude Include="ChatBackground.h" />
+    <ClInclude Include="UpdateClient.h" />
+    <ClInclude Include="UpdateProtocol.h" />
+    <ClInclude Include="UpdateKey.h" />
+    <ClInclude Include="UpdateRelease.h" />
     <ClInclude Include="Screenshot.h" />
     <ClInclude Include="ImageViewer.h" />
     <None Include="ChatBackground.bits" />

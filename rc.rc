@@ -1,4 +1,6 @@
 #include "resource.h"
+#include "UpdateRelease.h"
+202 RCDATA { UPDATE_RELEASE }
 
 LANGUAGE 9, 1
 

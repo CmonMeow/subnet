@@ -1,6 +1,7 @@
 
 
 #include "RunClient.h"
+#include "UpdateClient.h"
 #include "ChatCommands.h"
 #include "sysdef.h"
 #include <string.h>
@@ -166,6 +167,11 @@ LRESULT CALLBACK ChatWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
 
 int main()
 {
+    const int updateResult=UpdateClient::startup();
+    if(updateResult>=0){
+        if(updateResult)MessageBoxW(nullptr,L"The update could not be completed. Check oi.exe and its .previous backup before retrying.",L"Update failed",MB_OK|MB_ICONERROR);
+        return updateResult;
+    }
     char path[MAX_PATH];
     if (GetModuleFileNameA(NULL, path, MAX_PATH)) { char* slash = strrchr(path, '\\'); if (slash) { *slash = 0; SetCurrentDirectoryA(path); } }
     FreeConsole();

@@ -1,4 +1,5 @@
 #include "HostDirectoryProtocol.h"
+#include "UpdateServer.h"
 #include <windows.h>
 #include <sddl.h>
 #include <map>
@@ -53,6 +54,9 @@ int wmain(int argc,wchar_t** argv) {
     if(inet_pton(AF_INET,bindAddress.c_str(),&local.sin_addr)!=1 || bind(socket,reinterpret_cast<sockaddr*>(&local),sizeof(local))==SOCKET_ERROR){fprintf(stderr,"Cannot bind directory socket: %d\n",WSAGetLastError());closesocket(socket);WSACleanup();return 2;}
     u_long nonblocking=1;
     if(ioctlsocket(socket,FIONBIO,&nonblocking)==SOCKET_ERROR){fprintf(stderr,"Cannot make directory socket nonblocking: %d\n",WSAGetLastError());closesocket(socket);WSACleanup();return 2;}
+    UpdateServer updates;
+    if(updates.start(local,Updates::folder(Updates::executable())))puts("Signed updates available on the directory TCP port.");
+    else puts("Updates disabled: no matching signed oi.exe/oi.update, or TCP bind failed.");
     unsigned char cookieKey[32];randombytes_buf(cookieKey,sizeof(cookieKey));
     auto cookie=[&](const sockaddr_in& from,const Packet& p,ULONGLONG bucket,unsigned char* out){
         unsigned char input[30]={};memcpy(input,&from.sin_addr.s_addr,4);memcpy(input+4,&from.sin_port,2);memcpy(input+6,p.nonce,16);memcpy(input+22,&bucket,8);
@@ -66,7 +70,8 @@ int wmain(int argc,wchar_t** argv) {
     Budget global;ULONGLONG nextCleanup=0;
     printf("Directory listening on %s UDP %u. Listings expire after 90 seconds. Ctrl+C stops it.\n",bindAddress.c_str(),port);fflush(stdout);
     for(;;){
-        fd_set reads;FD_ZERO(&reads);FD_SET(socket,&reads);timeval wait={0,100000};select(0,&reads,nullptr,nullptr,&wait);
+        fd_set reads;FD_ZERO(&reads);FD_SET(socket,&reads);updates.watch(reads);timeval wait={0,updates.pollMicros()};select(0,&reads,nullptr,nullptr,&wait);
+        updates.tick();
         auto now=GetTickCount64();
         if(now>=nextCleanup){
             for(auto it=hosts.begin();it!=hosts.end();)if(now>=it->second.expires)it=hosts.erase(it);else ++it;

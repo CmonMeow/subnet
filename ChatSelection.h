@@ -16,14 +16,18 @@ struct ChatSelection {
         last=id==high.first?(std::min)(high.second,length):length;
         return true;
     }
-    template<class Lines,class Label> std::string text(const Lines& lines,Label label) const {
-        std::string result; bool haveLine=false;
+    template<class Lines,class Label,class Separator> std::string text(const Lines& lines,Label label,Separator separator) const {
+        std::string result;
+        const typename Lines::value_type* previous=nullptr;
         for(const auto& line:lines){
             auto value=label(line);size_t first,last;
             if(!range(line.historyId,value.size(),first,last))continue;
-            if(haveLine)result+="\r\n";
-            result+=value.substr(first,last-first);haveLine=true;
+            if(previous)result+=separator(*previous,line);
+            result+=value.substr(first,last-first);previous=&line;
         }
         return result;
+    }
+    template<class Lines,class Label> std::string text(const Lines& lines,Label label) const {
+        return text(lines,label,[](const auto&,const auto&){return "\r\n";});
     }
 };

@@ -18,7 +18,7 @@ using std::vector;
 
 const char* const DEFAULT_NETWORK_ADDRESS = "nigger.observer";
 const unsigned short DEFAULT_NETWORK_PORT = 777;
-const __int32 APP_PROTOCOL_VERSION = 31;
+const __int32 APP_PROTOCOL_VERSION = 32;
 const char* const BAN_LIST_FILENAME = "banlist.txt";
 const size_t CHAT_MAX_MESSAGE_CHARS = 1024;
 const size_t CHAT_MAX_LINE_CHARS = 1152;
@@ -352,6 +352,16 @@ public:
             put(value.data(), (__int32)length);
         }
     }
+    void putLongString(const string& value, size_t maxLength) {
+        const size_t length=(std::min)(value.size(),(std::min)(maxLength,size_t(65535)));
+        putUInt16((unsigned short)length);
+        if(length)put(value.data(),(__int32)length);
+    }
+    bool getLongString(string& value, size_t maxLength) {
+        value.clear();unsigned short length=0;
+        if(!getUInt16(length) || length>maxLength || remaining()<(__int32)length)return false;
+        value.resize(length);return !length || get(&value[0],length);
+    }
     bool getUInt8(unsigned char& value) { return get(&value, sizeof(value)); }
     bool getUInt16(unsigned short& value) { return get(&value, sizeof(value)); }
     bool getUInt64(unsigned __int64& value) { return get(&value, sizeof(value)); }
@@ -483,7 +493,7 @@ inline bool ParseAppRawString(const char* buffer, __int32 bufferSize, ChatPacket
     }
 
     NetPacket raw(buffer + sizeof(ChatPacketPrefix), payloadSize);
-    return raw.getString(text, maxLength) && raw.fullyRead();
+    return raw.getLongString(text, maxLength) && raw.fullyRead();
 }
 
 inline bool ParseAppRawBytes(const char* buffer, __int32 bufferSize, ChatPacketKind expectedType, string& bytes, size_t expectedBytes)

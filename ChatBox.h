@@ -65,7 +65,15 @@ class cChatBox
         }
     }
     void copySelection(const cNetworkRuntime& network) {
-        const auto text=_selection.text(network.chatLines(),[&](const NetworkChatLine& line){return historyText(network,line);});
+        const auto text=_selection.text(network.chatLines(),
+            [&](const NetworkChatLine& line){return historyText(network,line);},
+            [](const NetworkChatLine& previous,const NetworkChatLine& line){
+                if(previous.message && previous.message==line.message) {
+                    const size_t end=previous.messageOffset+previous.text.size();
+                    return line.message->substr(end,line.messageOffset-end);
+                }
+                return string("\r\n");
+            });
         if(text.empty())return;
         int count=MultiByteToWideChar(CP_UTF8,0,text.data(),(int)text.size(),nullptr,0);
         if(count<=0)return;
