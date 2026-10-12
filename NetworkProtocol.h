@@ -7,6 +7,7 @@
 #include <bitset>
 #include <cstdint>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -19,8 +20,8 @@ const char* const DEFAULT_NETWORK_ADDRESS = "nigger.observer";
 const unsigned short DEFAULT_NETWORK_PORT = 777;
 const __int32 APP_PROTOCOL_VERSION = 31;
 const char* const BAN_LIST_FILENAME = "banlist.txt";
-const size_t CHAT_MAX_MESSAGE_CHARS = 140;
-const size_t CHAT_MAX_LINE_CHARS = 192;
+const size_t CHAT_MAX_MESSAGE_CHARS = 1024;
+const size_t CHAT_MAX_LINE_CHARS = 1152;
 const size_t CHAT_WRAP_CHARS = 54;
 const size_t CHAT_VISIBLE_ROWS = 9;
 const size_t CHAT_MAX_HISTORY_LINES = 500;
@@ -51,6 +52,8 @@ struct NetworkChatLine
     unsigned long long historyId = 0;
     SYSTEMTIME receivedAt = {};
     string text;
+    std::shared_ptr<const string> message;
+    size_t messageOffset = 0;
     ChatLineKind kind;
     int fileSender = -1;
     string fileId;

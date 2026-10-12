@@ -141,6 +141,22 @@ class cNetworkRuntime
     ClientSessionInterface* _client;
     vector<__int32> _players;
     vector<NetworkChatLine> _chatLines;
+    size_t _chatWrapChars = CHAT_WRAP_CHARS;
+    void appendWrappedChat(NetworkChatLine line, size_t end) {
+        const auto& text=*line.message;
+        size_t offset=line.messageOffset;
+        while(offset<end) {
+            size_t count=(std::min)(_chatWrapChars,end-offset);
+            if(offset+count<end) {
+                const size_t split=text.rfind(' ',offset+count);
+                if(split!=string::npos && split>offset)count=split-offset;
+            }
+            line.text=text.substr(offset,count);line.messageOffset=offset;
+            line.historyId=++_nextChatLineId;_chatLines.push_back(line);
+            offset+=count;
+            while(offset<end && text[offset]==' ')++offset;
+        }
+    }
     unsigned long long _nextChatLineId = 0;
     unsigned __int64 _nextClientHeartbeat;
     unsigned __int64 _nextServerBroadcast;
@@ -854,30 +870,8 @@ class cNetworkRuntime
                 _statusNoticeUntil = GetTickCount64() + 6000;
             }
         }
-        size_t offset = 0;
-        while (offset < text.size())
-        {
-            size_t remaining = text.size() - offset;
-            size_t count = CHAT_WRAP_CHARS < remaining ? CHAT_WRAP_CHARS : remaining;
-            if (offset + count < text.size())
-            {
-                size_t split = text.rfind(' ', offset + count);
-                if (split != string::npos && split > offset)
-                {
-                    count = split - offset;
-                }
-            }
-            NetworkChatLine chatLine;
-            chatLine.text = text.substr(offset, count);
-            chatLine.kind = kind;
-            chatLine.historyId = ++_nextChatLineId; GetLocalTime(&chatLine.receivedAt);
-            _chatLines.push_back(chatLine);
-            offset += count;
-            while (offset < text.size() && text[offset] == ' ')
-            {
-                ++offset;
-            }
-        }
+        NetworkChatLine row;row.message=std::make_shared<const string>(text);row.kind=kind;
+        GetLocalTime(&row.receivedAt);appendWrappedChat(row,text.size());
         while (_chatLines.size() > CHAT_MAX_HISTORY_LINES)
         {
             _chatLines.erase(_chatLines.begin());
@@ -1538,6 +1532,25 @@ public:
     __int32 throughputBPS() const
     {
         return _throughputBPS;
+    }
+
+    bool setChatWrap(size_t characters) {
+        characters=(std::max)(size_t(1),characters);
+        if(characters==_chatWrapChars)return false;
+        _chatWrapChars=characters;
+        auto previous=std::move(_chatLines);_chatLines.clear();
+        for(size_t i=0;i<previous.size();) {
+            auto line=previous[i++];
+            if(!line.message){line.historyId=++_nextChatLineId;_chatLines.push_back(std::move(line));continue;}
+            size_t end=line.messageOffset+line.text.size();
+            while(i<previous.size() && previous[i].message==line.message) {
+                end=previous[i].messageOffset+previous[i].text.size();++i;
+            }
+            appendWrappedChat(std::move(line),end);
+        }
+        if(_chatLines.size()>CHAT_MAX_HISTORY_LINES)
+            _chatLines.erase(_chatLines.begin(),_chatLines.end()-CHAT_MAX_HISTORY_LINES);
+        return true;
     }
 
     const vector<NetworkChatLine>& chatLines() const

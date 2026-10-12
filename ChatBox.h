@@ -10,6 +10,7 @@ class cChatBox
     vec2i _selectionMouse;
     HWND _selectionWindow=nullptr;
     unsigned long long _historyTail=0, _hoverLine=0;
+    int _layoutWidth=0;
     ULONGLONG _hoverSince=0;
     bool _active;
     string _draft;
@@ -197,6 +198,30 @@ class cChatBox
         return (float)(std::max)(120, App.size.x - BOX_X * 2);
     }
 
+    void updateLayout(cNetworkRuntime& network) {
+        const int width=(int)boxWidth();
+        if(width==_layoutWidth)return;
+        _layoutWidth=width;_inputViewStart=0;
+        const auto& old=network.chatLines();
+        const size_t bottom=old.size()>_scrollOffset?old.size()-_scrollOffset:0;
+        const auto anchor=bottom?old[bottom-1]:NetworkChatLine{};
+        if(!network.setChatWrap((size_t)(std::max)(1,int(boxWidth()-24)/12)))return;
+        _selection.clear();_selecting=false;_hoverLine=0;
+        const auto& lines=network.chatLines();
+        if(_scrollOffset && bottom) {
+            for(size_t i=0;i<lines.size();++i)
+                if((anchor.message && lines[i].message==anchor.message &&
+                    lines[i].messageOffset<=anchor.messageOffset &&
+                    lines[i].messageOffset+lines[i].text.size()>anchor.messageOffset) ||
+                    (!anchor.message && !lines[i].message && lines[i].kind==anchor.kind &&
+                     lines[i].fileSender==anchor.fileSender && lines[i].fileId==anchor.fileId)) {
+                    _scrollOffset=lines.size()-i-1;break;
+                }
+        }
+        _historyTail=lines.empty()?0:lines.back().historyId;
+        clampScroll(network);
+    }
+
     void clampCursor()
     {
         if (_cursor > _draft.size())
@@ -223,7 +248,7 @@ class cChatBox
         {
             _inputViewStart = _cursor;
         }
-        const size_t usableChars = CHAT_WRAP_CHARS > 3 ? CHAT_WRAP_CHARS - 3 : CHAT_WRAP_CHARS;
+        const size_t usableChars = (size_t)(std::max)(1,int(boxWidth()-48)/12);
         if (_cursor > _inputViewStart + usableChars)
         {
             _inputViewStart = _cursor - usableChars;
@@ -253,39 +278,6 @@ class cChatBox
     static bool IsUrlChar(char c)
     {
         return c > 32 && c != '"' && c != '\'' && c != '<' && c != '>' && c != '[' && c != ']';
-    }
-
-    static bool UrlAtCharacter(const string& line, size_t character, string& url)
-    {
-        url.clear();
-        const char* prefixes[] = { "http://", "https://", "www." };
-        for (size_t p = 0; p < 3; ++p)
-        {
-            size_t found = line.find(prefixes[p]);
-            while (found != string::npos)
-            {
-                size_t end = found;
-                while (end < line.size() && IsUrlChar(line[end]))
-                {
-                    ++end;
-                }
-                if (character >= found && character < end)
-                {
-                    url = line.substr(found, end - found);
-                    while (!url.empty() && (url[url.size() - 1] == '.' || url[url.size() - 1] == ',' || url[url.size() - 1] == ')' || url[url.size() - 1] == ';'))
-                    {
-                        url.resize(url.size() - 1);
-                    }
-                    if (p == 2)
-                    {
-                        url = string("http://") + url;
-                    }
-                    return !url.empty();
-                }
-                found = line.find(prefixes[p], end);
-            }
-        }
-        return false;
     }
 
     static bool FindNextUrl(const string& line, size_t searchFrom, size_t& urlStart, size_t& urlEnd)
@@ -323,25 +315,35 @@ class cChatBox
         return true;
     }
 
-    static void DrawChatLineWithLinks(const string& line, float x, float y, float r, float g, float b)
+    static bool UrlAtCharacter(const string& text, size_t character, string& url)
     {
-        size_t offset = 0;
-        while (offset < line.size())
-        {
-            size_t urlStart = 0;
-            size_t urlEnd = 0;
-            if (!FindNextUrl(line, offset, urlStart, urlEnd))
-            {
-                QueueChatText(line.substr(offset).c_str(), x + (float)ChatTextWidth(line.substr(0, offset)), y, r, g, b);
-                break;
+        size_t start=0,end=0,offset=0;
+        while(FindNextUrl(text,offset,start,end)) {
+            if(character>=start && character<end) {
+                url=text.substr(start,end-start);
+                if(url.compare(0,4,"www.")==0)url="http://"+url;
+                return true;
             }
-            if (urlStart > offset)
-            {
-                QueueChatText(line.substr(offset, urlStart - offset).c_str(), x + (float)ChatTextWidth(line.substr(0, offset)), y, r, g, b);
-            }
-            QueueChatText(line.substr(urlStart, urlEnd - urlStart).c_str(), x + (float)ChatTextWidth(line.substr(0, urlStart)), y, 1.0f, .92f, .22f);
-            offset = urlEnd;
+            offset=end;
         }
+        url.clear();return false;
+    }
+
+    static void DrawChatLineWithLinks(const NetworkChatLine& row, float x, float y, float r, float g, float b)
+    {
+        const string& text=row.message ? *row.message : row.text;
+        const size_t first=row.message ? row.messageOffset : 0, last=first+row.text.size();
+        size_t offset=0,start=0,end=0,drawn=first;
+        while(FindNextUrl(text,offset,start,end)) {
+            if(start>=last)break;
+            offset=end;
+            if(end<=first)continue;
+            start=(std::max)(start,first);end=(std::min)(end,last);
+            if(start>drawn)QueueChatText(text.substr(drawn,start-drawn).c_str(),x+ChatTextWidth(text.substr(first,drawn-first)),y,r,g,b);
+            QueueChatText(text.substr(start,end-start).c_str(),x+ChatTextWidth(text.substr(first,start-first)),y,1.f,.92f,.22f);
+            drawn=end;
+        }
+        if(drawn<last)QueueChatText(text.substr(drawn,last-drawn).c_str(),x+ChatTextWidth(text.substr(first,drawn-first)),y,r,g,b);
     }
 
     bool openLinkUnderMouse(cNetworkRuntime& network, bool activate = true)
@@ -385,7 +387,8 @@ class cChatBox
                     ++character;
                 }
                 string url;
-                if (UrlAtCharacter(lines[i].text, character, url))
+                if (character < lines[i].text.size() && UrlAtCharacter(lines[i].message ? *lines[i].message : lines[i].text,
+                    character + (lines[i].message ? lines[i].messageOffset : 0), url))
                 {
                     if(activate) ShellExecuteA(NULL, "open", url.c_str(), NULL, NULL, SW_SHOWNORMAL);
                     return true;
@@ -561,6 +564,7 @@ public:
 
     void update(cNetworkRuntime& network)
     {
+        updateLayout(network);
         const auto& current=network.chatLines();
         if((_scrollOffset || _selection.selected() || (_selecting && _selectionMoved))&&_historyTail&&!current.empty()&&current.back().historyId!=_historyTail)
             for(size_t i=0;i<current.size();++i)if(current[i].historyId==_historyTail){_scrollOffset+=current.size()-i-1;break;}
@@ -728,8 +732,9 @@ public:
         }
     }
 
-    void draw(const cNetworkRuntime& network, bool windowFocused = true, bool showHistory = true)
+    void draw(cNetworkRuntime& network, bool windowFocused = true, bool showHistory = true)
     {
+        updateLayout(network);
         clampScroll(network);
         const float x = BOX_X;
         const float y = BOX_Y;
@@ -782,13 +787,13 @@ public:
                 QueueChatText(label.c_str(),x+8.f,textY-(float)(i-first)*lineHeight,1.f,lines[i].kind==CLKImage ? .92f : .30f,lines[i].kind==CLKImage ? .22f : .26f);
                 continue;
             }
-            DrawChatLineWithLinks(lines[i].text, x + 8.f, textY - (float)(i - first) * lineHeight, r, g, b);
+            DrawChatLineWithLinks(lines[i], x + 8.f, textY - (float)(i - first) * lineHeight, r, g, b);
         }
 
         size_t viewStart = inputViewStart();
         string draft = _draft.substr(viewStart);
         size_t cursorInView = _cursor - viewStart;
-        const size_t maxDraftChars = CHAT_WRAP_CHARS > 3 ? CHAT_WRAP_CHARS - 3 : CHAT_WRAP_CHARS;
+        const size_t maxDraftChars = (size_t)(std::max)(1,int(width-48)/12);
         if (draft.size() > maxDraftChars)
         {
             draft.resize(maxDraftChars);
