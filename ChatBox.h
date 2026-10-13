@@ -119,7 +119,7 @@ class cChatBox
     static bool ParseCommandArgument(const string& command, const char* prefix, string& argument)
     {
         size_t prefixLength = strlen(prefix);
-        if (_strnicmp(command.c_str(), prefix, prefixLength) != 0)
+        if (!MatchesCommand(command, prefix))
         {
             return false;
         }
@@ -394,6 +394,43 @@ class cChatBox
                     remainingX -= advance;
                     ++character;
                 }
+                if (character < lines[i].text.size() && (lines[i].kind == CLKNormal || lines[i].kind == CLKPrivate))
+                {
+                    const string& message = lines[i].message ? *lines[i].message : lines[i].text;
+                    const size_t position = character + (lines[i].message ? lines[i].messageOffset : 0);
+                    const size_t start = lines[i].kind == CLKPrivate ?
+                        (message.compare(0,10,"(private) ") == 0 ? 10 : message.compare(0,1,">") == 0 ? 1 : 0) : 0;
+                    for (const auto& person : network.participants())
+                    {
+                        if (person.first == network.localPlayerId() || person.second.empty()) continue;
+                        if (position < start || position >= start + person.second.size() ||
+                            message.compare(start, person.second.size()+2, person.second+": ") != 0) continue;
+                        if (activate)
+                        {
+                            string draft = _draft;
+                            if (!draft.empty() && draft[0] == '/')
+                            {
+                                string target, message;
+                                for (const char* command : {"/pm", "/w", "/tell", "/direct"})
+                                    if (ParsePrivateCommand(draft, command, target, message)) break;
+                                draft = message;
+                            }
+                            const string command = "/pm " + person.second;
+                            if (command.size() + 1 + draft.size() > CHAT_MAX_MESSAGE_CHARS)
+                            {
+                                network.showNotice("Draft too long for a private message.", true);
+                                _active = true;
+                            }
+                            else
+                            {
+                                prepareCommand(command.c_str());
+                                _draft += draft;
+                                _cursor = _draft.size();
+                            }
+                        }
+                        return true;
+                    }
+                }
                 string url;
                 if (character < lines[i].text.size() && UrlAtCharacter(lines[i].message ? *lines[i].message : lines[i].text,
                     character + (lines[i].message ? lines[i].messageOffset : 0), url))
@@ -413,7 +450,7 @@ class cChatBox
         {
             return false;
         }
-        size_t split = argument.find(' ');
+        size_t split = argument.find_first_of(" \t\r\n\v\f");
         if (split == string::npos)
         {
             return false;
@@ -491,7 +528,7 @@ class cChatBox
 
         case ChatCommand::Private:
         {
-            const string prefix = command.substr(0, command.find_first_of(" \t"));
+            const string prefix = command.substr(0, command.find_first_of(" \t\r\n\v\f"));
 
             string target;
             string message;
