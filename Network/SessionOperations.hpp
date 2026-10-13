@@ -687,7 +687,7 @@ HostSession::~HostSession()
     {
         std::lock_guard<std::recursive_mutex> poolGuard(poolCriticalSection());
         std::lock_guard<std::recursive_mutex> userGuard(peerStateMutex);
-        unsigned iterator;
+        PeerChannelTable::Iterator iterator;
         __int32 player;
         IntrusivePtr<ChannelInterface> old;
         while (users.getFirst(iterator, old, &player))
@@ -879,7 +879,7 @@ IntrusivePtr<PacketBuffer> HostSession::SendPayload(__int32 to, BYTE* buffer, __
 	if (to == BROADCAST_PEER_ID)
 	{ 
 
-		unsigned it;
+		PeerChannelTable::Iterator it;
 		if (users.getFirst(it, channel))
 			do
 			{
@@ -998,30 +998,31 @@ void HostSession::SetRoomState(__int32 state)
 
 bool HostSession::FormatListenAddress(char* address, DWORD addressLen)
 {
-	poolCriticalSection().lock();
-	bool result = (hostEndpoint() != NULL);
-	if (result)
+	if (!address || !addressLen) return false;
+	address[0] = 0;
+	std::lock_guard<std::recursive_mutex> lock(poolCriticalSection());
+	sockaddr_in local = {};
+	if (!hostEndpoint() || !localEndpointAddress(local, roomListenPort)) return false;
+	const int length = snprintf(address, addressLen, "%u.%u.%u.%u:%u",
+		(unsigned)IPV4_OCTET_1(local), (unsigned)IPV4_OCTET_2(local),
+		(unsigned)IPV4_OCTET_3(local), (unsigned)IPV4_OCTET_4(local), (unsigned)roomListenPort);
+	if (length < 0 || (DWORD)length >= addressLen)
 	{
-		struct sockaddr_in local;
-		localEndpointAddress(local, roomListenPort);
-		sprintf(address, "%u.%u.%u.%u:%u",
-			(unsigned)IPV4_OCTET_1(local), (unsigned)IPV4_OCTET_2(local), (unsigned)IPV4_OCTET_3(local), (unsigned)IPV4_OCTET_4(local), (unsigned)roomListenPort);
+		address[0] = 0;
+		return false;
 	}
-	poolCriticalSection().unlock();
-	return result;
+	return true;
 }
 
 bool HostSession::GetServerAddress(sockaddr_in& address)
 {
-	localEndpointAddress(address, roomListenPort);
-	return true;
+	return localEndpointAddress(address, roomListenPort);
 }
 
 bool HostSession::GetClientAddress(__int32 client, sockaddr_in& address)
 {
-	IntrusivePtr<ChannelInterface> channel;
-	if (!users.get(client, channel))
-		return false;
+	auto channel = playerToChannel(client);
+	if (!channel) return false;
 	channel->remoteEndpointAddress(address);
 	return true;
 }

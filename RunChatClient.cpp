@@ -327,6 +327,7 @@ void RunChatClient(HWND hWnd)
             voiceChat.resetTransmitMode();
         }
         const bool volumeInput=modal || userVolumes.update(network,voiceChat,settings,GetForegroundWindow()==hWnd);
+        if (releaseHotkey && !(GetAsyncKeyState(releaseHotkey) & 0x8000)) releaseHotkey = 0;
         if (!selectingHotkey && !releaseHotkey && !volumeInput) chatBox.update(network);
         input.ConsumeMouseWheel();
         const bool talkDown = !modal && !selectingHotkey && !releaseHotkey &&
@@ -410,7 +411,7 @@ void RunChatClient(HWND hWnd)
                 DragFinish(drop);
                 continue;
             }
-            if (selectingHotkey && (msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN))
+            if (msg.hwnd == hWnd && selectingHotkey && (msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN))
             {
                 if (msg.wParam == VK_ESCAPE)
                     selectingHotkey = false;
@@ -424,7 +425,7 @@ void RunChatClient(HWND hWnd)
                 input.Clear();
                 continue;
             }
-            if (releaseHotkey && msg.wParam == releaseHotkey &&
+            if (msg.hwnd == hWnd && releaseHotkey && msg.wParam == releaseHotkey &&
                 (msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN ||
                  msg.message == WM_KEYUP || msg.message == WM_SYSKEYUP))
             {

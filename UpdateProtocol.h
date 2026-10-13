@@ -26,7 +26,12 @@ inline std::wstring executable() {
     wchar_t path[32768];DWORD n=GetModuleFileNameW(nullptr,path,32768);
     return n && n<32768 ? std::wstring(path,n) : std::wstring();
 }
-inline std::wstring folder(const std::wstring& path) {return path.substr(0,path.find_last_of(L"\\/"));}
+inline std::wstring folder(const std::wstring& path) {
+    const auto slash=path.find_last_of(L"\\/");
+    if(slash==std::wstring::npos)return {};
+    const bool root=slash==0 || (slash==2 && path[1]==L':');
+    return path.substr(0,slash+(root?1:0));
+}
 struct File {
     HANDLE handle=INVALID_HANDLE_VALUE;
     File()=default;

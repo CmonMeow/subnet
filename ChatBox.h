@@ -146,7 +146,9 @@ class cChatBox
             const char* text = static_cast<const char*>(GlobalLock(handle));
             if (text)
             {
-                result = text;
+                const size_t size = (std::min)(GlobalSize(handle), (SIZE_T)CHAT_MAX_MESSAGE_CHARS);
+                const char* end = static_cast<const char*>(memchr(text, 0, size));
+                result.assign(text, end ? (size_t)(end - text) : size);
                 GlobalUnlock(handle);
             }
         }
@@ -408,12 +410,13 @@ class cChatBox
                         if (activate)
                         {
                             string draft = _draft;
-                            if (!draft.empty() && draft[0] == '/')
+                            for (const char* alias : {"/pm", "/w", "/tell", "/direct"})
                             {
-                                string target, message;
-                                for (const char* command : {"/pm", "/w", "/tell", "/direct"})
-                                    if (ParsePrivateCommand(draft, command, target, message)) break;
-                                draft = message;
+                                if (!MatchesCommand(draft, alias)) continue;
+                                const size_t target = draft.find_first_not_of(" \t\r\n\v\f", strlen(alias));
+                                const size_t body = target == string::npos ? string::npos : draft.find_first_of(" \t\r\n\v\f", target);
+                                draft = body == string::npos ? string() : draft.substr(body + 1);
+                                break;
                             }
                             const string command = "/pm " + person.second;
                             if (command.size() + 1 + draft.size() > CHAT_MAX_MESSAGE_CHARS)

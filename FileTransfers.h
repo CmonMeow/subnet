@@ -20,6 +20,7 @@ public:
     static constexpr unsigned FlightBytes = 1024 * 1024;
     static constexpr unsigned __int64 MaxFileBytes = 4ULL * 1024 * 1024 * 1024;
     static constexpr unsigned MaxPacketBytes = ChunkBytes + 128;
+    static constexpr size_t MaxOffers = 1024, MaxOffersPerPeer = 128;
     using Key = std::pair<int, string>;
     using Send = std::function<bool(int, const vector<unsigned char>&)>;
     using Notice = std::function<void(const string&, bool)>;
@@ -320,6 +321,11 @@ public:
         if (type == Offer || type == ImageOffer || type == CompressedImageOffer) {
             unsigned __int64 size; string name;
             if (!token.empty() || !raw.getUInt64(size) || size > MaxFileBytes || !raw.getString(name,200) || !validName(name) || !raw.fullyRead() || downloads.count(key)) return;
+            // Bound retained metadata without evicting offers or active downloads.
+            if (downloads.size() >= MaxOffers) return;
+            size_t peerOffers=0;
+            for(auto it=downloads.lower_bound({peer,{}});it!=downloads.end() && it->first.first==peer;++it)
+                if(++peerOffers>=MaxOffersPerPeer)return;
             const bool image=type!=Offer;
             if(image) {
                 if(size<=Screenshot::HeaderBytes || size>Screenshot::MaxBytes)return;
@@ -451,9 +457,11 @@ public:
         for (auto it = uploads.begin(); it != uploads.end();) {
             if (now - it->second.touched > 30000) { control(Cancel,it->first,it->second.token); notice("File upload timed out.",true); it = uploads.erase(it); } else ++it;
         }
-        // Expiry stops new acceptances only; active uploads retain their shared Source.
+        // Keep progress and cancellation available until existing uploads finish.
+        // Accept still rejects new downloads after the offer expires.
         for (auto it = sources.begin(); it != sources.end();) {
-            if (now >= it->second->expires || it->second->peers.empty()) it = sources.erase(it); else ++it;
+            const bool expired=now >= it->second->expires || it->second->peers.empty();
+            if (expired && std::none_of(uploads.begin(),uploads.end(),[&](const auto& entry){return entry.first.second==it->first;})) it = sources.erase(it); else ++it;
         }
         for (auto& entry : uploads) {
             auto& u=entry.second;

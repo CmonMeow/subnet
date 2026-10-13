@@ -3,7 +3,6 @@
 #include "SessionTransport.hpp"
 #include <time.h>
 #include <algorithm>
-#include <iterator>
 #include <unordered_map>
 #include <vector>
 #include "TransportIncludes.hpp"
@@ -326,25 +325,9 @@ class PeerChannelTable
 	// Non-owning reverse index; updated under the host peer-state mutex.
 	std::unordered_map<ChannelInterface*, __int32> _peerIds;
 
-	bool getByIndex(unsigned index, IntrusivePtr<ChannelInterface>& result, __int32* key) const
-	{
-		if (index >= _users.size())
-		{
-			result = NULL;
-			if (key)
-				*key = -1;
-			return false;
-		}
-
-		std::unordered_map<__int32, IntrusivePtr<ChannelInterface>>::const_iterator it = _users.begin();
-		std::advance(it, index);
-		result = it->second;
-		if (key)
-			*key = it->first;
-		return true;
-	}
-
 public:
+	using Iterator = std::unordered_map<__int32, IntrusivePtr<ChannelInterface>>::const_iterator;
+
 	unsigned card() const
 	{
 		return (unsigned)_users.size();
@@ -397,16 +380,26 @@ public:
 		return result;
 	}
 
-	bool getFirst(unsigned& iterator, IntrusivePtr<ChannelInterface>& first, __int32* key = NULL) const
+	bool getFirst(Iterator& iterator, IntrusivePtr<ChannelInterface>& first, __int32* key = NULL) const
 	{
-		iterator = 0;
-		return getByIndex(iterator++, first, key);
+		iterator = _users.begin();
+		return getNext(iterator, first, key);
 	}
 
-	bool getNext(unsigned& iterator, IntrusivePtr<ChannelInterface>& next, __int32* key = NULL) const
+	bool getNext(Iterator& iterator, IntrusivePtr<ChannelInterface>& next, __int32* key = NULL) const
 	{
-		return getByIndex(iterator++, next, key);
+		if (iterator == _users.end())
+		{
+			next = NULL;
+			if (key) *key = -1;
+			return false;
+		}
+		next = iterator->second;
+		if (key) *key = iterator->first;
+		++iterator;
+		return true;
 	}
+
 };
 
 class HostSession : public HostSessionInterface
@@ -798,19 +791,7 @@ PacketStatus onHandshakePacket(PacketBuffer* msg, PacketStatus event, void* data
 				ch = peer->lookupChannel(distant);
 				if (ch)
 				{ 
-					unsigned it;
-					__int32 existingPlayer = -1;
-					IntrusivePtr<ChannelInterface> existingCh;
-					if (_server->users.getFirst(it, existingCh, &existingPlayer))
-					{
-						do
-						{
-							if (existingCh.GetRef() == ch)
-								break;
-						}
-						while (_server->users.getNext(it, existingCh, &existingPlayer));
-					}
-					if (existingPlayer >= RESERVED_PEER_ID_COUNT && existingCh.GetRef() == ch)
+					if (_server->users.peerId(ch) >= RESERVED_PEER_ID_COUNT)
 					{ 
 						poolCriticalSection().unlock();
 						_server->peerStateMutex.unlock();

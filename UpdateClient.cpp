@@ -117,6 +117,7 @@ int UpdateClient::startup() {
     if(!MoveFileExW(temporaryBackup.c_str(),backup.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){
         if(!ReplaceFileW(target.c_str(),temporaryBackup.c_str(),nullptr,0,nullptr,nullptr))
             MessageBoxW(nullptr,L"Could not finish the update. The previous executable remains in the update folder as oi.previous.",L"Update failed",MB_OK|MB_ICONERROR);
+        else launch(target,L"--cleanup-update "+quote(selfFolder));
         return 2;
     }
     if(!launch(target,L"--cleanup-update "+quote(selfFolder))){

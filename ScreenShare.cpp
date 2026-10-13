@@ -13,6 +13,7 @@ namespace {
 const wchar_t* const ScreenUrl=L"https://oi/";
 constexpr UINT FocusScreenMessage=WM_APP+1;
 constexpr UINT ChooseScreenMessage=WM_APP+2;
+constexpr UINT FailedScreenMessage=WM_APP+3;
 // WebView initialization callbacks need the same DPI context as their window,
 // even when the chat window uses Windows' automatic scaling.
 struct ScreenDpiScope {
@@ -127,6 +128,7 @@ struct ScreenShare::State : std::enable_shared_from_this<ScreenShare::State>
                 return 0;
             }
             if(message==ChooseScreenMessage){state->chooseSource();return 0;}
+            if(message==FailedScreenMessage){state->viewMode=false;SendMessageW(window,WM_CLOSE,0,0);return 0;}
             if(message==WM_SIZE){state->resized();return 0;}
             if(message==WM_DPICHANGED){const RECT& bounds=*reinterpret_cast<RECT*>(lp);SetWindowPos(window,nullptr,bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top,SWP_NOZORDER|SWP_NOACTIVATE);return 0;}
             if(message==WM_CLOSE){if(state->viewMode&&state->active){state->stopWatching();return 0;}state->shutdown();DestroyWindow(window);return 0;}
@@ -227,7 +229,7 @@ struct ScreenShare::State : std::enable_shared_from_this<ScreenShare::State>
                         if(!configured(s->web->add_NewWindowRequested(Callback<ICoreWebView2NewWindowRequestedEventHandler>([](ICoreWebView2*,ICoreWebView2NewWindowRequestedEventArgs* args)->HRESULT {args->put_Handled(TRUE);return S_OK;}).Get(),&token)))return S_OK;
                         if(!configured(s->web->add_PermissionRequested(Callback<ICoreWebView2PermissionRequestedEventHandler>([](ICoreWebView2*,ICoreWebView2PermissionRequestedEventArgs* args)->HRESULT {args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);return S_OK;}).Get(),&token)))return S_OK;
                         if(!configured(s->web->add_ProcessFailed(Callback<ICoreWebView2ProcessFailedEventHandler>([weak,current](ICoreWebView2*,ICoreWebView2ProcessFailedEventArgs*)->HRESULT {
-                            auto s=weak.lock();if(s&&s->generation==current){s->error("Screen viewer stopped unexpectedly.");PostMessageW(s->window,WM_CLOSE,0,0);}return S_OK;
+                            auto s=weak.lock();if(s&&s->generation==current){s->error("Screen viewer stopped unexpectedly.");PostMessageW(s->window,FailedScreenMessage,0,0);}return S_OK;
                         }).Get(),&token)))return S_OK;
                         HRESULT filter=s->web->AddWebResourceRequestedFilter(L"*",COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
                         if(FAILED(filter)){s->error("Could not configure the local screen page.",filter);PostMessageW(s->window,WM_CLOSE,0,0);return S_OK;}

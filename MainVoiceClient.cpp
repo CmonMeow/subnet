@@ -14,6 +14,17 @@ namespace
 const int CHAT_CLIENT_WIDTH = 704;
 const int CHAT_CLIENT_HEIGHT = 250;
 
+bool SetClientDirectory()
+{
+    wchar_t path[32768];
+    const DWORD length = GetModuleFileNameW(nullptr, path, _countof(path));
+    if (!length || length >= _countof(path)) return false;
+    wchar_t* slash = wcsrchr(path, L'\\');
+    if (!slash) return false;
+    slash[1] = 0;
+    return SetCurrentDirectoryW(path) != FALSE;
+}
+
 void ShowChatCommandMenu(HWND hwnd)
 {
     RECT titleBar = {};
@@ -172,8 +183,11 @@ int main()
         if(updateResult)MessageBoxW(nullptr,L"The update could not be completed. Check oi.exe and its .previous backup before retrying.",L"Update failed",MB_OK|MB_ICONERROR);
         return updateResult;
     }
-    char path[MAX_PATH];
-    if (GetModuleFileNameA(NULL, path, MAX_PATH)) { char* slash = strrchr(path, '\\'); if (slash) { *slash = 0; SetCurrentDirectoryA(path); } }
+    if (!SetClientDirectory())
+    {
+        MessageBoxW(nullptr, L"Could not open the oi folder.", L"Startup failed", MB_OK | MB_ICONERROR);
+        return EXIT_FAILURE;
+    }
     FreeConsole();
 
     HINSTANCE instance = GetModuleHandleA(NULL);

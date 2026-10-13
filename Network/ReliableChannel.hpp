@@ -163,6 +163,7 @@ public:
 
 	virtual unsigned roundTripTime()
 	{
+		std::lock_guard<std::recursive_mutex> lock(stateMutex);
 		return smoothedRttMs;
 	}
 
@@ -702,7 +703,6 @@ protected:
 	unsigned __int64 ackRateSamples[AckRateSampleSlots];
 	__int32 ackRateWriteIndex;
 
-	unsigned roundTripTime(bool average) { return average ? smoothedRttMs : latestRttMs; }
 	float estimateAcknowledgedRate(unsigned __int64 windowSize);
 };
 

@@ -411,17 +411,11 @@ public:
 inline string LocalExecutableName()
 {
     char path[MAX_PATH];
-    if (!GetModuleFileNameA(NULL, path, sizeof(path)))
-    {
-        return "oi.exe";
-    }
-    const char* slash = strrchr(path, '\\');
-    const char* slash2 = strrchr(path, '/');
-    if (slash2 && (!slash || slash2 > slash))
-    {
-        slash = slash2;
-    }
-    return slash ? string(slash + 1) : string(path);
+    const DWORD length = GetModuleFileNameA(NULL, path, sizeof(path));
+    if (!length || length >= sizeof(path)) return {};
+    const string fullPath(path, length);
+    const auto slash = fullPath.find_last_of("\\/");
+    return slash == string::npos ? fullPath : fullPath.substr(slash + 1);
 }
 
 inline void EncodeLocalIdentityRaw(NetPacket& raw)
