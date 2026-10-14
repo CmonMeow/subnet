@@ -260,6 +260,7 @@ ScreenShare::ScreenShare(HWND parent,Send send,Notice notice):state(std::make_sh
 }
 ScreenShare::~ScreenShare(){close();if(SUCCEEDED(state->com))CoUninitialize();}
 void ScreenShare::close(){state->viewMode=false;if(state->window)SendMessageW(state->window,WM_CLOSE,0,0);else if(state->controller||state->active)state->shutdown();}
+bool ScreenShare::busy() const{return state->picking || state->active || state->watching.kind!=ScreenSignaling::Close;}
 bool ScreenShare::sharing() const{return state->active;}
 bool ScreenShare::focused() const{return state->window && GetForegroundWindow()==state->window;}
 void ScreenShare::toggle(){

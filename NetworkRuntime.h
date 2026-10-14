@@ -5,9 +5,15 @@
 #include "FileSaveDialog.h"
 #include "ImageViewer.h"
 #include "ScreenSignaling.h"
+#include "HostUpdate.h"
 
 class cNetworkRuntime
 {
+    HostUpdate _hostUpdate;
+    string _resumeHello;
+    unsigned char _resumeSeed[32]={};
+    ULONGLONG _resumeSeedUntil=0;
+    bool _localScreenBusy=false, _updateDownloadReady=true;
     ULONGLONG _disconnectDeadline=0;
     struct EndingPeer { ULONGLONG deadline; DisconnectReason reason; string text; };
     std::map<int,EndingPeer> _endingPeers;
@@ -387,7 +393,7 @@ class cNetworkRuntime
             messageSize = (__int32)decrypted.size();
             return true;
         }
-        return !_clientCrypto.ready() && header->type == NAMTKeyAccept;
+        return !_clientCrypto.ready() && (header->type==NAMTKeyAccept || header->type==NAMTResumeAccept);
     }
 
     bool prepareServerMessage(__int32 from, char* buffer, __int32 bufferSize, string& decrypted, const char*& message, __int32& messageSize)
@@ -417,7 +423,7 @@ class cNetworkRuntime
             return true;
         }
         const auto session = _serverCrypto.find(from);
-        return header->type == NAMTKeyHello &&
+        return (header->type==NAMTKeyHello || header->type==NAMTResumeHello) &&
             (session == _serverCrypto.end() || !session->second.ready());
     }
 
@@ -450,7 +456,102 @@ class cNetworkRuntime
         {
             NetPacket raw;
             raw.put(hello.data(), (__int32)hello.size());
-            sendPlainRawFromClient(NAMTKeyHello, raw);
+            if(_hostUpdate.phase==HostUpdate::Reconnecting){_resumeHello=hello;sendPlainRawFromClient(NAMTResumeHello,raw);}
+            else sendPlainRawFromClient(NAMTKeyHello, raw);
+        }
+    }
+
+    void pauseForUpdate(bool paused) {
+        _files.pauseNew(paused);_screens.pauseNew(paused);
+    }
+    bool sendUpdate(int peer,HostUpdate::Kind kind) {
+        NetPacket raw;raw.putInt32(kind);
+        if(kind!=HostUpdate::Capability && kind!=HostUpdate::StatefulCapability)raw.putString(_hostUpdate.id,32);
+        if(kind==HostUpdate::Prepare || kind==HostUpdate::StatefulPrepare){
+            raw.putUInt64(_hostUpdate.release);raw.putInt32(_hostUpdate.protocol);
+            raw.putBytes(vector<unsigned char>(_hostUpdate.publicKey,_hostUpdate.publicKey+32),32);
+        }
+        const auto flags=(DeliveryOptions)(DeliveryGuaranteed|DeliveryHighPriority);
+        return _server?sendRawFromServer(peer,NAMTUpdate,raw,flags):sendRawFromClient(NAMTUpdate,raw,flags);
+    }
+    void receiveUpdate(int from,const char* message,int size) {
+        NetPacket raw(message+sizeof(ChatPacketPrefix),size-sizeof(ChatPacketPrefix));
+        int kind=0;string id;
+        if(!raw.getInt32(kind)||kind<HostUpdate::Capability||kind>HostUpdate::StatefulPrepare)return;
+        if(kind!=HostUpdate::Capability && kind!=HostUpdate::StatefulCapability && (!raw.getString(id,32)||!ScreenSignaling::validId(id)))return;
+        const auto now=GetTickCount64();
+        if(_server){
+            auto it=_hostUpdate.peers.find(from);
+            if(it==_hostUpdate.peers.end() || !raw.fullyRead())return;
+            auto& peer=it->second;
+            if(kind==HostUpdate::StatefulCapability){peer.capable=true;return;}
+            if(kind==HostUpdate::Capability)return;
+            if(id!=_hostUpdate.id)return;
+            if(_hostUpdate.phase==HostUpdate::Draining && (kind==HostUpdate::Ready||kind==HostUpdate::Busy)){
+                peer.ready=kind==HostUpdate::Ready;
+            }else if(_hostUpdate.phase==HostUpdate::Committing && kind==HostUpdate::Committed)peer.committed=true;
+            return;
+        }
+        if(!_client || !clientReady() || _hostUpdate.phase==HostUpdate::Reconnecting)return;
+        if(kind==HostUpdate::Prepare || kind==HostUpdate::StatefulPrepare){
+            unsigned __int64 release=0;int protocol=0;vector<unsigned char> key;
+            if(!raw.getUInt64(release)||!release||!raw.getInt32(protocol)||protocol<APP_PROTOCOL_VERSION||
+                !raw.getBytes(key,32)||key.size()!=32||sodium_is_zero(key.data(),key.size())||!raw.fullyRead())return;
+            if(_hostUpdate.phase!=HostUpdate::Idle)return;
+            sockaddr_in server={};if(!_client->GetServerAddress(server)||server.sin_family!=AF_INET)return;
+            char address[INET_ADDRSTRLEN];if(!InetNtopA(AF_INET,&server.sin_addr,address,sizeof(address)))return;
+            _hostUpdate.address=string(address)+":"+std::to_string(ntohs(server.sin_port));
+            _hostUpdate.savedAddress=_connectingAddress;_hostUpdate.id=id;
+            memcpy(_hostUpdate.publicKey,key.data(),32);_hostUpdate.release=release;_hostUpdate.protocol=protocol;
+            _hostUpdate.phase=HostUpdate::Draining;_hostUpdate.deadline=0;_hostUpdate.nextReport=0;
+            _hostUpdate.stateful=kind==HostUpdate::StatefulPrepare;_hostUpdate.reported=false;
+            pauseForUpdate(true);
+        }else if(id==_hostUpdate.id && raw.fullyRead()){
+            if(kind==HostUpdate::Cancel && (_hostUpdate.phase==HostUpdate::Draining || _hostUpdate.phase==HostUpdate::Committing)){
+                _hostUpdate.reset();pauseForUpdate(false);
+            }else if(kind==HostUpdate::Commit && _hostUpdate.phase==HostUpdate::Draining && _hostUpdate.readySent && !updateBusy()){
+                _hostUpdate.phase=HostUpdate::Committing;_hostUpdate.deadline=0;
+                sendUpdate(-1,HostUpdate::Committed);
+            }
+        }
+    }
+    void serviceHostUpdate() {
+        const auto now=GetTickCount64();
+        if(_resumeSeedUntil && now>=_resumeSeedUntil){sodium_memzero(_resumeSeed,sizeof(_resumeSeed));_resumeSeedUntil=0;}
+        if(_server){
+            if(_hostUpdate.phase==HostUpdate::Draining){
+                for(auto& p:_hostUpdate.peers)if(p.second.capable && !p.second.prepared)
+                    p.second.prepared=sendUpdate(p.first,HostUpdate::StatefulPrepare);
+                if(!updateBusy() && now>=_hostUpdate.deadline){
+                    vector<int> outdated;
+                    for(const auto& p:_hostUpdate.peers)if(!p.second.capable)outdated.push_back(p.first);
+                    for(int player:outdated)endPlayerSession(player,DisconnectOther,"Host updating; update your client and reconnect.");
+                }
+                if(!updateBusy() && _hostUpdate.allReady()){
+                    _hostUpdate.phase=HostUpdate::Committing;_hostUpdate.deadline=now+15000;
+                    for(const auto& p:_hostUpdate.peers)sendUpdate(p.first,HostUpdate::Commit);
+                }
+            }else if(_hostUpdate.phase==HostUpdate::Committing && now>=_hostUpdate.deadline)cancelHostUpdate();
+            return;
+        }
+        if(_hostUpdate.phase==HostUpdate::Idle)return;
+        if(_hostUpdate.phase==HostUpdate::Reconnecting && now>=_hostUpdate.deadline){
+            _hostUpdate.reset();pauseForUpdate(false);
+            if(_client && !clientReady())disconnect();
+            showNotice("Host update timed out. Use /connect to retry.",true);return;
+        }
+        if(_hostUpdate.phase==HostUpdate::Draining && clientReady()){
+            const bool ready=!updateBusy();
+            // Legacy hosts expect periodic readiness; stateful hosts need only transitions.
+            if(!_hostUpdate.reported || ready!=_hostUpdate.readySent || (!_hostUpdate.stateful && now>=_hostUpdate.nextReport)){
+                if(sendUpdate(-1,ready?HostUpdate::Ready:HostUpdate::Busy)){
+                    _hostUpdate.readySent=ready;_hostUpdate.reported=true;_hostUpdate.nextReport=now+1000;
+                }
+            }
+        }
+        if(_hostUpdate.phase==HostUpdate::Reconnecting && !_client && now>=_hostUpdate.nextAttempt && _hostUpdate.protocol==APP_PROTOCOL_VERSION){
+            _hostUpdate.nextAttempt=now+2000;
+            connectTo(_hostUpdate.address,true);
         }
     }
 
@@ -535,7 +636,15 @@ class cNetworkRuntime
         {
             _localPlayerId = assignPacket.playerId;
             _participantsDirty = true;
-            if (_localPlayerId >= 0) _connectDeadline = 0;
+            if (_localPlayerId >= 0) {
+                _connectDeadline = 0;
+                if(_hostUpdate.phase==HostUpdate::Reconnecting){
+                    _connectingAddress=_hostUpdate.savedAddress;
+                    _hostUpdate.reset();pauseForUpdate(false);
+                }
+                sendUpdate(-1,HostUpdate::Capability);
+                sendUpdate(-1,HostUpdate::StatefulCapability);
+            }
             if (_settings && _localPlayerId >= 0 && !_settings->setServerAddress(_connectingAddress))
                 showNotice("Connected; could not save server setting.", true);
 
@@ -543,6 +652,9 @@ class cNetworkRuntime
         }
 
         if (messageSize < sizeof(ChatPacketPrefix)) return;
+        if(reinterpret_cast<const ChatPacketPrefix*>(message)->type==NAMTUpdate){
+            if(_clientCrypto.ready() && !decrypted.empty())receiveUpdate(0,message,messageSize);return;
+        }
         if (reinterpret_cast<const ChatPacketPrefix*>(message)->type == NAMTScreen) { NetPacket raw(message+sizeof(ChatPacketPrefix),messageSize-sizeof(ChatPacketPrefix)); _screens.receive(0,raw); return; }
         if (reinterpret_cast<const ChatPacketPrefix*>(message)->type == NAMTFile) { handleFileMessage(0,message,messageSize,false); return; }
         if (reinterpret_cast<const ChatPacketPrefix*>(message)->type == NAMTPresence)
@@ -608,7 +720,7 @@ class cNetworkRuntime
 
         string text;
         if (ParseAppRawString(message, messageSize, NAMTSessionEnd, text, CHAT_MAX_LINE_CHARS)) {
-            addChatLine(text, CLKSystem);
+            if(_hostUpdate.phase!=HostUpdate::Committing)addChatLine(text, CLKSystem);
             _remoteEnded = true;
             return;
         }
@@ -645,16 +757,23 @@ class cNetworkRuntime
             return;
         }
         string keyBytes;
-        if (ParseAppRawBytes(message, messageSize, NAMTKeyAccept, keyBytes, crypto_kx_PUBLICKEYBYTES))
-        {
-            if (_clientCrypto.acceptServerKey(keyBytes))
-            {
+        const bool resuming=_hostUpdate.phase==HostUpdate::Reconnecting;
+        if(ParseAppRawBytes(message,messageSize,resuming?NAMTResumeAccept:NAMTKeyAccept,keyBytes,resuming?96:32)){
+            if(resuming){
+                if(keyBytes.size()!=96 || _resumeHello.size()!=32)return;
+                const string transcript=_resumeHello+keyBytes.substr(0,32);
+                if(crypto_sign_verify_detached((const unsigned char*)keyBytes.data()+32,
+                    (const unsigned char*)transcript.data(),transcript.size(),_hostUpdate.publicKey))return;
+                keyBytes.resize(32);
+            }
+            if (_clientCrypto.acceptServerKey(keyBytes)){
                 _client->SetPacketKeys(_clientCrypto.receiveKey(), _clientCrypto.sendKey());
-                sendRawIdentityFromClient();
-                sendPrivateChatKeyFromClient();
+                sendRawIdentityFromClient();sendPrivateChatKeyFromClient();
             }
             return;
         }
+        if(reinterpret_cast<const ChatPacketPrefix*>(message)->type==NAMTKeyAccept ||
+           reinterpret_cast<const ChatPacketPrefix*>(message)->type==NAMTResumeAccept)return;
         addChatLine(string("system: ") + string(message, message + messageSize), CLKSystem);
     }
 
@@ -675,13 +794,14 @@ class cNetworkRuntime
             return;
         }
         const ChatPacketPrefix* messageHeader = reinterpret_cast<const ChatPacketPrefix*>(message);
-        if (messageHeader->type != NAMTKeyHello &&
+        if (messageHeader->type != NAMTKeyHello && messageHeader->type != NAMTResumeHello &&
             messageHeader->type != NAMTConnect &&
             _playerIdentities.find(from) == _playerIdentities.end())
         {
             return;
         }
 
+        if(messageHeader->type==NAMTUpdate){receiveUpdate(from,message,messageSize);return;}
         if (messageHeader->type == NAMTScreen) { NetPacket raw(message+sizeof(ChatPacketPrefix),messageSize-sizeof(ChatPacketPrefix)); _screens.receive(from,raw); return; }
         if (messageHeader->type == NAMTFile) { handleFileMessage(from,message,messageSize,true); return; }
 
@@ -732,19 +852,27 @@ class cNetworkRuntime
             return;
         }
         string keyBytes;
-        if (ParseAppRawBytes(message, messageSize, NAMTKeyHello, keyBytes, crypto_kx_PUBLICKEYBYTES))
+        if (ParseAppRawBytes(message,messageSize,NAMTKeyHello,keyBytes,32) || ParseAppRawBytes(message,messageSize,NAMTResumeHello,keyBytes,32))
         {
             if (_playerIdentities.find(from) != _playerIdentities.end())
             {
                 return;
             }
+            const bool resuming=messageHeader->type==NAMTResumeHello;
+            if(resuming && GetTickCount64()>=_resumeSeedUntil)return;
             string response;
             if (_serverCrypto[from].acceptClientHello(keyBytes, response))
             {
-                NetPacket raw;
-                raw.put(response.data(), (__int32)response.size());
+                if(resuming){
+                    unsigned char publicKey[32],secret[64],signature[64];
+                    crypto_sign_seed_keypair(publicKey,secret,_resumeSeed);
+                    const string transcript=keyBytes+response;
+                    crypto_sign_detached(signature,nullptr,(const unsigned char*)transcript.data(),transcript.size(),secret);
+                    sodium_memzero(secret,sizeof(secret));response.append((const char*)signature,sizeof(signature));
+                }
+                NetPacket raw;raw.put(response.data(), (__int32)response.size());
                 _server->SetPacketKeys(from, _serverCrypto[from].receiveKey(), _serverCrypto[from].sendKey());
-                sendPlainRawFromServer(from, NAMTKeyAccept, raw);
+                sendPlainRawFromServer(from,resuming?NAMTResumeAccept:NAMTKeyAccept,raw);
             }
             else
             {
@@ -789,6 +917,8 @@ class cNetworkRuntime
 
     void onCreatePlayer(__int32 player, const char* name)
     {
+        if(_hostUpdate.phase!=HostUpdate::Idle){endPlayerSession(player,DisconnectOther,"Host updating. Try again shortly.");return;}
+        _hostUpdate.peers.emplace(player,HostUpdate::Peer{});
         if (std::find(_players.begin(), _players.end(), player) == _players.end())
         {
             _players.push_back(player);
@@ -797,6 +927,7 @@ class cNetworkRuntime
 
     void onDeletePlayer(__int32 player)
     {
+        _hostUpdate.peers.erase(player);
         _endingPeers.erase(player);
         std::map<__int32, string>::iterator pending = _pendingLeaveMessages.find(player);
         string leaveMessage;
@@ -1317,6 +1448,79 @@ public:
     ~cNetworkRuntime()
     {
         if (_client || _server) { disconnect(); finishDisconnect(); }
+        sodium_memzero(_resumeSeed,sizeof(_resumeSeed));
+    }
+
+    bool updateBusy() const {return !_updateDownloadReady || _files.busy() || _screens.busy() || _localScreenBusy || !_fileRelay.empty();}
+    void updateDownloadReady(bool ready){_updateDownloadReady=ready;}
+    void localScreenBusy(bool busy){_localScreenBusy=busy;}
+    bool updatePending() const {return _hostUpdate.phase!=HostUpdate::Idle;}
+    bool canBeginHostUpdate() const {
+        return isHost() && !updatePending();
+    }
+    bool beginHostUpdate(uint64_t release,int protocol) {
+        if(!canBeginHostUpdate() || !release || protocol<APP_PROTOCOL_VERSION)return false;
+        _hostUpdate.reset();_hostUpdate.phase=HostUpdate::Draining;
+        // Allow an in-flight capability announcement to arrive before removing old clients.
+        _hostUpdate.deadline=GetTickCount64()+5000;
+        unsigned char id[16],secret[64];char hex[33];randombytes_buf(id,sizeof(id));sodium_bin2hex(hex,sizeof(hex),id,sizeof(id));
+        _hostUpdate.id=hex;randombytes_buf(_hostUpdate.seed,32);
+        crypto_sign_seed_keypair(_hostUpdate.publicKey,secret,_hostUpdate.seed);sodium_memzero(secret,sizeof(secret));
+        _hostUpdate.release=release;_hostUpdate.protocol=protocol;pauseForUpdate(true);return true;
+    }
+    void cancelHostUpdate() {
+        if(_server && updatePending()){
+            vector<int> failed;
+            for(const auto& p:_hostUpdate.peers)if(!sendUpdate(p.first,HostUpdate::Cancel))failed.push_back(p.first);
+            // Without a delivered cancel, a stateful peer would remain paused.
+            for(int player:failed)endPlayerSession(player,DisconnectOther,"Host update cancelled; reconnect.");
+        }
+        _hostUpdate.reset();pauseForUpdate(false);showNotice("Host update cancelled; room remains open.",true);
+    }
+    bool hostUpdateReady() const {return isHost() && _hostUpdate.phase==HostUpdate::Committing && _hostUpdate.allCommitted() && GetTickCount64()<_hostUpdate.deadline && !updateBusy();}
+    bool waitingForHost() const {return _hostUpdate.phase==HostUpdate::Reconnecting;}
+    uint64_t hostUpdateRelease() const {return _hostUpdate.release;}
+    int hostUpdateProtocol() const {return _hostUpdate.protocol;}
+    std::unique_ptr<SessionResume> updateResume() const {
+        auto resume=std::make_unique<SessionResume>();resume->mode=_server?1:2;
+        resume->expires=GetTickCount64()+180000;
+        if(_server){resume->port=_hostingPort;memcpy(resume->key,_hostUpdate.seed,32);}
+        else {
+            string host;unsigned short port=0;
+            if(!parseServerAddress(_hostUpdate.address,host,port))return {};
+            resume->port=port;memcpy(resume->key,_hostUpdate.publicKey,32);
+            strncpy_s(resume->address,_hostUpdate.address.c_str(),_TRUNCATE);
+            strncpy_s(resume->savedAddress,_hostUpdate.savedAddress.c_str(),_TRUNCATE);
+        }
+        for(const auto& line:_chatLines){
+            if(resume->lines>=500)break;
+            auto& out=resume->history[resume->lines++];out.time=line.receivedAt;
+            out.kind=line.kind<=CLKError?line.kind:CLKSystem;
+            strncpy_s(out.text,line.text.c_str(),_TRUNCATE);
+        }
+        return resume;
+    }
+    bool restoreSession(const SessionResume& resume) {
+        if(!resume.valid())return false;
+        for(unsigned i=0;i<resume.lines;++i){
+            const auto& saved=resume.history[i];if(saved.text[1152] || saved.kind>CLKError)return false;
+        }
+        for(unsigned i=0;i<resume.lines;++i){
+            const auto& saved=resume.history[i];NetworkChatLine line;
+            line.text=SanitiseChatLine(saved.text);line.kind=(ChatLineKind)saved.kind;
+            line.receivedAt=saved.time;line.historyId=++_nextChatLineId;_chatLines.push_back(std::move(line));
+        }
+        if(resume.mode==1){
+            memcpy(_resumeSeed,resume.key,32);_resumeSeedUntil=resume.expires;
+            return hostOnPort((unsigned short)resume.port);
+        }
+        string host;unsigned short port=0;
+        if(!parseServerAddress(resume.address,host,port)||port!=resume.port)return false;
+        in_addr ip={};if(InetPtonA(AF_INET,host.c_str(),&ip)!=1)return false;
+        _hostUpdate.phase=HostUpdate::Reconnecting;_hostUpdate.protocol=APP_PROTOCOL_VERSION;
+        _hostUpdate.address=resume.address;_hostUpdate.savedAddress=resume.savedAddress;
+        _hostUpdate.deadline=(std::min)(resume.expires,GetTickCount64()+60000);
+        memcpy(_hostUpdate.publicKey,resume.key,32);pauseForUpdate(true);return true;
     }
 
     bool hostOnPort(unsigned short port = DEFAULT_NETWORK_PORT)
@@ -1329,8 +1533,10 @@ public:
             return false;
         }
 
+        _hostUpdate.reset();pauseForUpdate(false);
         _hostName = IdentityDisplayName(LocalUserName(), 0);
         _players.clear();
+        _hostUpdate.peers.clear();
         _playerIdentities.clear();
         _participantsDirty = true;
         _rosterRevision = 0;
@@ -1338,13 +1544,13 @@ public:
         _privateChatNames.clear();
         _pendingLeaveMessages.clear();
         _serverCrypto.clear();
-        _clientCrypto.clear();
+        _clientCrypto.clear();_resumeHello.clear();
         _voicePackets.clear();
         _privateChatKeyReady = false;
         ensurePrivateChatKey();
         _nextServerBroadcast = 0;
         _nextHostStatistics = 0;
-        _server = MakeHostSession();
+        _server = MakeHostSession(port);
         if (!_server || !_server->StartSession("oi", "", port))
         {
             addChatLine("host failed", CLKError);
@@ -1361,7 +1567,7 @@ public:
         return true;
     }
 
-    bool connectTo(const string& requestedAddress)
+    bool connectTo(const string& requestedAddress,bool resuming=false)
     {
         _statusNotice.clear();
         _statusNoticeUntil = 0;
@@ -1385,11 +1591,12 @@ public:
             showNotice("Invalid server address or port.", true);
             return false;
         }
+        if(!resuming){_hostUpdate.reset();pauseForUpdate(false);}
         _client = MakeClientSession();
         JoinResult result = _client ? _client->StartSession(address, "", false, port, "oi", NULL) : JoinError;
         if (result != JoinOK && result != JoinNone)
         {
-            addChatLine(string("Failed to join. Error: ") + ConnectResultName(result), CLKError);
+            if(!waitingForHost())addChatLine(string("Failed to join. Error: ") + ConnectResultName(result), CLKError);
             stopUdpWorkers();
             delete _client;
             _client = NULL;
@@ -1400,7 +1607,7 @@ public:
         _connectingAddress = address;
         _transportConnecting = result == JoinNone;
         _connectDeadline = GetTickCount64() + 10000;
-        addChatLine("connecting", CLKSystem);
+        if(!waitingForHost())addChatLine("connecting", CLKSystem);
         if (!_transportConnecting) beginClientCryptoHandshake();
         return true;
     }
@@ -1411,15 +1618,16 @@ public:
             if(GetTickCount64()>=_disconnectDeadline||!outgoingPending())finishDisconnect();
             return;
         }
+        serviceHostUpdate();
         drainEndingPeers();
         flushFileRelay();
         int filePeer; string fileId; std::wstring destination;
         if (_fileDialog.poll(filePeer,fileId,destination) && !destination.empty()) _files.accept({filePeer,fileId},destination);
         if (_client && _connectDeadline && GetTickCount64() >= _connectDeadline)
         {
-            addChatLine("connection timed out", CLKError);
+            if(!waitingForHost())addChatLine("connection timed out", CLKError);
             _remoteEnded = true;
-            disconnect();
+            disconnect(_hostUpdate.phase==HostUpdate::Committing || _hostUpdate.phase==HostUpdate::Reconnecting);
             return;
         }
         if (_client && _transportConnecting)
@@ -1429,10 +1637,10 @@ public:
             _transportConnecting = false;
             if (result != JoinOK)
             {
-                addChatLine(result == JoinTimeout ? "connection timed out" :
+                if(!waitingForHost())addChatLine(result == JoinTimeout ? "connection timed out" :
                     string("Failed to join. Error: ") + ConnectResultName(result), CLKError);
                 _remoteEnded = true;
-                disconnect();
+                disconnect(_hostUpdate.phase==HostUpdate::Committing || _hostUpdate.phase==HostUpdate::Reconnecting);
                 return;
             }
             beginClientCryptoHandshake();
@@ -1462,7 +1670,7 @@ public:
                 string reason = _client->GetWhySessionTerminatedStr();
                 if (!_remoteEnded && !reason.empty()) addChatLine(reason, CLKError);
                 _remoteEnded = true;
-                disconnect();
+                disconnect(_hostUpdate.phase==HostUpdate::Committing || _hostUpdate.phase==HostUpdate::Reconnecting);
                 return;
             }
             else
@@ -1757,8 +1965,15 @@ public:
         _chatLines.clear();
     }
 
-    bool disconnect()
+    bool disconnect(bool restarting=false)
     {
+        if(restarting){
+            if(_hostUpdate.phase==HostUpdate::Committing){
+                _hostUpdate.phase=HostUpdate::Reconnecting;
+                _hostUpdate.deadline=GetTickCount64()+60000;
+                _hostUpdate.nextAttempt=GetTickCount64()+1000;
+            }
+        } else {_hostUpdate.reset();pauseForUpdate(false);sodium_memzero(_resumeSeed,sizeof(_resumeSeed));_resumeSeedUntil=0;}
         if (!_client && !_server) return false;
         if(_disconnectDeadline)return true;
         _screens.clear();
@@ -1787,6 +2002,7 @@ private:
         _remoteEnded = false;
         _localPlayerId = -1;
         _players.clear();
+        _hostUpdate.peers.clear();
         _playerIdentities.clear();
         _participantsDirty = true;
         _rosterRevision = 0;
@@ -1794,13 +2010,13 @@ private:
         _privateChatNames.clear();
         _pendingLeaveMessages.clear();
         _serverCrypto.clear();
-        _clientCrypto.clear();
+        _clientCrypto.clear();_resumeHello.clear();
         _voicePackets.clear();
         _privateChatKeyReady = false;
         ensurePrivateChatKey();
         _nextClientHeartbeat = _nextServerBroadcast = 0;
         _nextHostStatistics = 0;
         _latencyMS = _throughputBPS = 0;
-        addChatLine(hosting ? "Hosting stopped." : "disconnected", CLKSystem);
+        if(_hostUpdate.phase!=HostUpdate::Reconnecting)addChatLine(hosting ? "Hosting stopped." : "disconnected", CLKSystem);
     }
 };

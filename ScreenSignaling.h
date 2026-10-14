@@ -11,6 +11,7 @@ public:
     struct Event { int kind = 0, peer = -1; string share, connection, payload; };
     using Wire = std::function<void(int,const NetPacket&)>;
 private:
+    bool paused=false;
     struct MediaBudget {
         ULONGLONG time=0;unsigned bytes=524288,packets=1024;
         bool allow(size_t size) {
@@ -95,6 +96,9 @@ private:
         }
     }
     void route(int from, Event e) {
+        if(paused && (e.kind==Start || e.kind==Watch)){
+            deliver(from,{e.kind==Start?Stop:Close,from,e.share,e.connection,"Host update pending."});return;
+        }
         if(e.kind==Start) {
             if(!e.connection.empty() || !e.payload.empty()) return;
             auto old=offers.find(from);
@@ -143,6 +147,7 @@ public:
         auto found=offers.find(owner); return found!=offers.end() && found->second==id;
     }
     void send(Event e) {
+        if(paused && (e.kind==Start || e.kind==Watch)){queue({e.kind==Start?Stop:Close,e.kind==Start?local():e.peer,e.share,e.connection,"Host update pending."});return;}
         if(!validId(e.share) || e.payload.size()>(e.kind==Media?2048u:24000u) || e.kind<Start || e.kind>Media ||
             (e.kind>=Watch && !validId(e.connection))) return;
         if(e.kind==Watch) {
@@ -205,5 +210,7 @@ public:
         auto& queue=events.empty()?media:events;if(queue.empty())return false;
         event=std::move(queue.front());queue.pop_front();return true;
     }
-    void clear() { offers.clear(); connections.clear(); budgets.clear(); events.clear(); media.clear(); }
+    void pauseNew(bool value){paused=value;}
+    bool busy() const {return !offers.empty() || !connections.empty();}
+    void clear() { paused=false; offers.clear(); connections.clear(); budgets.clear(); events.clear(); media.clear(); }
 };

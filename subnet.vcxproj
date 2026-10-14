@@ -148,6 +148,9 @@
     <Image Include="Icon.ico" />
     <ClInclude Include="ChatBackground.h" />
     <ClInclude Include="UpdateClient.h" />
+    <ClInclude Include="HostUpdate.h" />
+    <ClInclude Include="SessionResume.h" />
+    <ClInclude Include="ProtocolVersion.h" />
     <ClInclude Include="UpdateProtocol.h" />
     <ClInclude Include="UpdateKey.h" />
     <ClInclude Include="UpdateRelease.h" />

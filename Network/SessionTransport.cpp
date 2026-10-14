@@ -467,7 +467,7 @@ protected:
 
 public:
 	
-	HostSession();
+	HostSession(unsigned short port);
 
 	virtual ~HostSession();
 
@@ -606,12 +606,12 @@ static EndpointInterface* clientEndpoint()
 	return clientPeer.GetRef();
 }
 
-static EndpointInterface* hostEndpoint(bool create = true)
+static EndpointInterface* hostEndpoint(bool create = true, unsigned short port = 777)
 
 {
 	if (create && !serverPeer)
 	{
-		serverPeer = endpointRegistry()->makeEndpoint(DefaultListenPort());
+		serverPeer = endpointRegistry()->makeEndpoint(port);
 		if (serverPeer)
 		{
 			ChannelInterface* ctrl = serverPeer->handshakeChannel();

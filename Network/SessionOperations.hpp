@@ -61,9 +61,9 @@ ClientSessionInterface* MakeClientSession()
 	return new ClientSession;
 }
 
-HostSessionInterface* MakeHostSession()
+HostSessionInterface* MakeHostSession(unsigned short port)
 {
-	return new HostSession;
+	return new HostSession(port);
 }
 
 IntrusivePtr<PacketBuffer> assembleFragments(PacketBuffer* msg)
@@ -654,7 +654,7 @@ unsigned ClientSession::TrimTransportStorage()
 	return ret;
 }
 
-HostSession::HostSession()
+HostSession::HostSession(unsigned short port)
 	: peerStateMutex(),
 	  inboundMutex(),
 	  receiptMutex()
@@ -673,7 +673,7 @@ HostSession::HostSession()
 
 	registerHostSession(this);
 	poolCriticalSection().lock();
-	roomListenPort = hostEndpoint() ? hostEndpoint()->endpointPort() : 0;
+	roomListenPort = hostEndpoint(true,port) ? hostEndpoint()->endpointPort() : 0;
 	poolCriticalSection().unlock();
 	peerStateMutex.unlock();
 }
@@ -805,7 +805,7 @@ void HostSession::DisconnectPeer(__int32 player, DisconnectReason reason, const 
 
 bool HostSession::StartSession(std::string name, std::string password, __int32 port)
 {
-	if (!roomListenPort)
+	if (!roomListenPort || roomListenPort != port)
 	{
 		Error("Cannot start host on port %d.", port);
 		return false;

@@ -578,6 +578,8 @@ class cChatBox
 
 public:
     bool linkHovered(cNetworkRuntime& network) { return openLinkUnderMouse(network,false); }
+    const string& draft() const {return _draft;}
+    void restoreDraft(const string& text){_draft=SanitiseChatText(text);_cursor=_draft.size();}
     void prepareCommand(const char* command)
     {
         _draft = string(command) + " ";

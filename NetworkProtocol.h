@@ -1,5 +1,6 @@
 #pragma once
 #include "VoiceAudioFormat.h"
+#include "ProtocolVersion.h"
 
 #include "Network/SessionTransport.hpp"
 #include "sodium.h"
@@ -18,7 +19,7 @@ using std::vector;
 
 const char* const DEFAULT_NETWORK_ADDRESS = "subnet.contact";
 const unsigned short DEFAULT_NETWORK_PORT = 777;
-const __int32 APP_PROTOCOL_VERSION = 32;
+const __int32 APP_PROTOCOL_VERSION = SUBNET_PROTOCOL_VERSION;
 const char* const BAN_LIST_FILENAME = "banlist.txt";
 const size_t CHAT_MAX_MESSAGE_CHARS = 1024;
 const size_t CHAT_MAX_LINE_CHARS = 1152;
@@ -446,7 +447,7 @@ inline bool ValidAppMessageType(ChatPacketKind type)
     switch (type) {
     case NAMTConnect: case NAMTDisconnect: case NAMTChat: case NAMTHeartbeat:
     case NAMTSessionEnd: case NAMTPlayerAssign: case NAMTVoice: case NAMTKeyHello: case NAMTKeyAccept:
-    case NAMTScreen: case NAMTFile: case NAMTSystemNotice: case NAMTCommandError: case NAMTPresence: case NAMTChatKey: case NAMTPrivateChat: case NAMTEncrypted: return true;
+    case NAMTResumeHello: case NAMTResumeAccept: case NAMTUpdate: case NAMTScreen: case NAMTFile: case NAMTSystemNotice: case NAMTCommandError: case NAMTPresence: case NAMTChatKey: case NAMTPrivateChat: case NAMTEncrypted: return true;
     default: return false;
     }
 }

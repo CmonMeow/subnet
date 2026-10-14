@@ -205,17 +205,27 @@ void RunChatClient(HWND hWnd)
     DragAcceptFiles(hWnd,TRUE);
     PackedClientSettings settings;
     cNetworkRuntime network(hWnd, &settings);
-    if (settings.dedicated()) network.hostOnPort();
+    auto resume=UpdateClient::takeResume();
+    const bool resumeMic=resume && resume->microphoneEnabled;
+    const string resumeDraft=resume?resume->draft:"";
+    bool skipFailedUpdate=resume && resume->updateFailed;
+    if(resume){
+        const bool restored=network.restoreSession(*resume);UpdateClient::completeResume(restored);
+        if(restored && resume->updateFailed)network.showNotice("Update failed; previous version restored.",true);
+        resume.reset();
+        if(!restored){App.quit=true;ReleaseDC(hWnd,dc);return;}
+    }
+    else if (settings.dedicated()) network.hostOnPort();
     HostDirectoryClient directory(HostDirectoryClient::configuredAddress(DEFAULT_NETWORK_ADDRESS), APP_PROTOCOL_VERSION);
     UpdateClient updater(HostDirectoryClient::configuredAddress(DEFAULT_NETWORK_ADDRESS));
     HostBrowser browser;
-    cChatBox chatBox;
+    cChatBox chatBox;chatBox.restoreDraft(resumeDraft);
     string previousPublishStatus;
     network.browseHosts=[&]{
         if(network.hasConnection())network.showNotice("Use /disconnect before browsing hosts.",true);
         else {chatBox.deactivate();browser.show(directory);}
     };
-    cVoiceChat voiceChat;
+    cVoiceChat voiceChat;voiceChat.restoreMicLatch(resumeMic);
     MessageChimeCooldown chimeCooldown;
     std::function<void(bool)> appFocusChanged = [&](bool active) {
         chimeCooldown.focusChanged(active);
@@ -255,12 +265,46 @@ void RunChatClient(HWND hWnd)
     if (commandMenu) SetPropA(hWnd, "ChatCommandsMenu", commandMenu);
     int menuHostState = -1;
 
+    bool clientUpdateAttempted=false;
+    uint64_t requestedHostRelease=0;
     bool ticking = false;
     auto tick = [&](bool modal) {
         if(ticking || App.quit) return;
         ticking = true;
         updateChimeFocus();
-        if(!modal && !network.hasConnection() && GetForegroundWindow()==hWnd && updater.prompt(hWnd)){App.quit=true;ticking=false;return;}
+        updater.poll();
+        if(skipFailedUpdate && updater.readyRelease()){updater.skipRelease();skipFailedUpdate=false;}
+        if(!network.updatePending())requestedHostRelease=0;
+        if(!network.isHost() && network.hostUpdateRelease()>requestedHostRelease &&
+            updater.requestRelease(network.hostUpdateRelease()))requestedHostRelease=network.hostUpdateRelease();
+        // A protocol-changing update must be downloaded before this client reports ready.
+        network.updateDownloadReady(network.isHost() || network.hostUpdateProtocol()<=APP_PROTOCOL_VERSION ||
+            (updater.readyRelease()>=network.hostUpdateRelease() && updater.readyProtocol()==network.hostUpdateProtocol()));
+        network.localScreenBusy(screenShare.busy());
+        if(!modal && !network.updatePending()){
+            if(network.isHost() && updater.claimUpdate()){
+                if(!network.beginHostUpdate(updater.readyRelease(),updater.readyProtocol())){
+                    updater.skipRelease();network.showNotice("This update cannot restart the room automatically.",true);
+                }
+            }else if(!network.hasConnection() && updater.claimUpdate()){
+                if(updater.install()){App.quit=true;ticking=false;return;}
+                updater.skipRelease();network.showNotice("Could not start update.",true);
+            }
+        }
+        if(!modal && network.hostUpdateReady()){
+            auto state=network.updateResume();
+            if(state){state->microphoneEnabled=voiceChat.micLatched();strncpy_s(state->draft,chatBox.draft().c_str(),_TRUNCATE);}
+            if(state && updater.install(state.get())){App.quit=true;ticking=false;return;}
+            updater.skipRelease();network.cancelHostUpdate();
+        }
+        if(!network.waitingForHost())clientUpdateAttempted=false;
+        if(!modal && !clientUpdateAttempted && network.waitingForHost() && network.hostUpdateRelease() && updater.readyRelease()>=network.hostUpdateRelease() &&
+            updater.readyRelease() && updater.readyProtocol()==network.hostUpdateProtocol()){
+            clientUpdateAttempted=true;
+            auto state=network.updateResume();
+            if(state){state->microphoneEnabled=voiceChat.micLatched();strncpy_s(state->draft,chatBox.draft().c_str(),_TRUNCATE);}
+            if(state && updater.install(state.get())){App.quit=true;ticking=false;return;}
+        }
         network.update();
         directory.update(network.isHost(),network.hostingPort(),(unsigned)network.participants().size(),settings.hostName);
         if(!modal) browser.update(network,directory);
@@ -314,7 +358,9 @@ void RunChatClient(HWND hWnd)
         const bool hotkeyClicked = !modal && ChatButtonHovered(hotkeyButton) && input.leftClick();
         const bool screenClicked=!modal &&ChatButtonHovered(screenButton) && input.leftClick();
         if (micClicked || hotkeyClicked || screenClicked) input.KeyUp(VK_LBUTTON);
-        if(screenClicked) {
+        if(screenClicked && network.updatePending() && !screenShare.sharing() && !screenShare.watching()){
+            network.showNotice("Host update pending.",true);
+        }else if(screenClicked) {
             selectingHotkey=false;releaseHotkey=0;input.Clear();
             if(screenShare.watching()) screenShare.stopWatching();
             else if(network.isHost() || network.clientReady()) screenShare.toggle();

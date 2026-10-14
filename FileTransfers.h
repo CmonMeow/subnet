@@ -71,6 +71,7 @@ private:
     std::map<std::pair<Key,string>,PendingControl> pendingControls;
     std::pair<Key,string> lastControl;
     Key lastServed;
+    bool paused=false;
     Send send;
     Notice notice;
     Announce announce;
@@ -164,6 +165,7 @@ public:
         string result; for (unsigned char c : name) result += c >= 32 && c < 127 ? (char)c : '?'; return result;
     }
     bool offer(const std::wstring& path, const vector<int>& peers) {
+        if(paused){notice("Host update pending.",true);return false;}
         if (peers.empty()) { notice("No recipients are ready for file transfers.", true); return false; }
         if (!localPath(path)) { notice("Path is not a local file.", true); return false; }
         auto source = std::make_shared<Source>(); source->file = newFile();
@@ -195,6 +197,7 @@ public:
         return true;
     }
     bool offerImage(std::shared_ptr<Screenshot> image, const vector<int>& peers) {
+        if(paused){notice("Host update pending.",true);return false;}
         if (!image || !image->valid()) return false;
         if (peers.empty()) { notice("No recipients are ready for images.",true); return false; }
         size_t images=0;for(const auto& entry:sources)if(entry.second->file->image)++images;
@@ -227,7 +230,7 @@ public:
         auto it=downloads.find(key);if(it==downloads.end() || !it->second.image)return false;
         auto& d=it->second;
         if(d.readyImage){if(viewImage)viewImage(d.readyImage);return true;}
-        if(d.file || d.state!="save")return false;
+        if(paused || d.file || d.state!="save")return false;
         size_t active=0;for(const auto& entry:downloads)if(entry.second.file)++active;
         if(active>=4){notice("At most four downloads can run.",true);return false;}
         auto image=Screenshot::allocate((size_t)d.size);
@@ -286,6 +289,7 @@ public:
     bool active(const Key& key) const { auto it = downloads.find(key); return it != downloads.end() && !!it->second.file; }
     void cancel(const Key& key) { auto it = downloads.find(key); if (it != downloads.end() && it->second.file) failDownload(key, it->second, "cancelled"); }
     bool accept(const Key& key, const std::wstring& destination) {
+        if(paused){notice("Host update pending.",true);return false;}
         auto it = downloads.find(key);
         if (it == downloads.end() || it->second.file || it->second.image || it->second.state != "save") return false;
         size_t active = 0; for (const auto& entry : downloads) if (entry.second.file) ++active;
@@ -346,7 +350,7 @@ public:
         if (type == Accept) {
             if (!raw.fullyRead() || uploads.count(key)) return;
             auto source = sources.find(id);
-            if (source == sources.end() || !source->second->peers.count(peer) || now >= source->second->expires || uploads.size() >= 4) { control(Cancel,key,token); return; }
+            if (paused || source == sources.end() || !source->second->peers.count(peer) || now >= source->second->expires || uploads.size() >= 4) { control(Cancel,key,token); return; }
             Upload u; u.source = source->second; u.token = token; u.touched = now; crypto_generichash_init(&u.hash,nullptr,0,32);
             uploads.emplace(key,std::move(u)); return;
         }
@@ -518,5 +522,11 @@ public:
         for (auto& entry : downloads) if (entry.first.first == peer) { if(releaseDownload(entry.second))entry.second.state = "unavailable"; }
         for (auto& entry : sources) entry.second->peers.erase(peer);
     }
-    void clear() { pendingControls.clear(); for(auto& entry:downloads)releaseDownload(entry.second); uploads.clear(); downloads.clear(); sources.clear(); }
+    void pauseNew(bool value){paused=value;}
+    bool busy() const {
+        if(!uploads.empty() || !pendingControls.empty())return true;
+        for(const auto& d:downloads)if(d.second.file)return true;
+        return false;
+    }
+    void clear() { paused=false; pendingControls.clear(); for(auto& entry:downloads)releaseDownload(entry.second); uploads.clear(); downloads.clear(); sources.clear(); }
 };

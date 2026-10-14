@@ -1,6 +1,8 @@
 #include "resource.h"
 #include "UpdateRelease.h"
+#include "ProtocolVersion.h"
 202 RCDATA { UPDATE_RELEASE }
+203 RCDATA { SUBNET_PROTOCOL_VERSION }
 
 LANGUAGE 9, 1
 

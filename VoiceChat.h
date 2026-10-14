@@ -246,6 +246,8 @@ public:
         }
     }
 
+    bool micLatched() const {return _buttonTransmitEnabled;}
+    void restoreMicLatch(bool enabled){_buttonTransmitEnabled=enabled;}
     bool micEnabled() const { return _transmitEnabled && _recording; }
 
     void update(cNetworkRuntime& network, bool talkKeyDown, const PackedClientSettings& settings, bool micClicked = false)

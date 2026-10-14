@@ -57,18 +57,14 @@ EndpointInterface* EndpointRegistry::makeEndpoint(unsigned short port)
 	struct sockaddr_in local;
 	local.sin_family = AF_INET;
 	local.sin_addr.s_addr = bindIPAddress;
-	for (; port <= 49151; port++)
-	{
-		local.sin_port = htons(port);
-		if (bind(s, (struct sockaddr*)&local, sizeof(local)) != SOCKET_ERROR)
-		{
-			EndpointInterface* newPeer = new UdpEndpoint(s, port, this);
-			if (!newPeer)
-				return NULL;
-			peers[newPeer->endpointPort()] = newPeer;
-			return newPeer;
-		}
-	}
+    local.sin_port = htons(port);
+    BOOL exclusive=TRUE;
+    if(setsockopt(s,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,(const char*)&exclusive,sizeof(exclusive))==0 &&
+        bind(s,(struct sockaddr*)&local,sizeof(local))!=SOCKET_ERROR){
+        EndpointInterface* newPeer=new UdpEndpoint(s,port,this);
+        peers[newPeer->endpointPort()]=newPeer;
+        return newPeer;
+    }
 	closesocket(s);
 	return NULL;
 }
