@@ -48,7 +48,7 @@ public:
     HostDirectoryClient& operator=(const HostDirectoryClient&)=delete;
     static std::string configuredAddress(const char* fallback) {
         std::ifstream file("DirectoryAddress.txt");char text[256]={};
-        return file.getline(text,sizeof(text))&&text[0]?text:fallback;
+        return file.getline(text,sizeof(text))&&text[0]&&_stricmp(text,"nigger.observer")!=0?text:fallback;
     }
     void refresh(unsigned requestedPage=0) {
         if(socket==INVALID_SOCKET)return;

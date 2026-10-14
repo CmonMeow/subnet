@@ -16,7 +16,7 @@
 using std::string;
 using std::vector;
 
-const char* const DEFAULT_NETWORK_ADDRESS = "nigger.observer";
+const char* const DEFAULT_NETWORK_ADDRESS = "subnet.contact";
 const unsigned short DEFAULT_NETWORK_PORT = 777;
 const __int32 APP_PROTOCOL_VERSION = 32;
 const char* const BAN_LIST_FILENAME = "banlist.txt";
@@ -423,7 +423,8 @@ inline void EncodeLocalIdentityRaw(NetPacket& raw)
     raw.putInt32(APP_PROTOCOL_VERSION);
     raw.putString(LocalDriveSerial(), 10);
     raw.putString(LocalUserName(), 48);
-    raw.putUInt8(_stricmp(LocalExecutableName().c_str(), "oi.exe") == 0 ? 1 : 0);
+    const auto executable = LocalExecutableName();
+    raw.putUInt8((_stricmp(executable.c_str(), "subnet.exe") == 0 || _stricmp(executable.c_str(), "oi.exe") == 0) ? 1 : 0);
 }
 
 inline string BuildAppRawMessage(ChatPacketKind type, const NetPacket& raw)

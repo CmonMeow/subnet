@@ -70,7 +70,6 @@ private:
     struct PendingControl { unsigned char type; unsigned __int64 offset; ULONGLONG expires; };
     std::map<std::pair<Key,string>,PendingControl> pendingControls;
     std::pair<Key,string> lastControl;
-    ULONGLONG lastChunk = 0;
     Key lastServed;
     Send send;
     Notice notice;
@@ -446,7 +445,7 @@ public:
             d.finishing=true;d.touched=now;
         }
     }
-    void update(bool voiceActive = true) {
+    void update() {
         io.poll();
         const auto now = GetTickCount64();
         retryControls(now);
@@ -482,12 +481,12 @@ public:
                 };
             });
         }
-        if (uploads.empty() || (voiceActive && now - lastChunk < 64)) return;
+        if (uploads.empty()) return;
         unsigned __int64 outstanding = 0;
         for (const auto& entry : uploads) outstanding += entry.second.offset - entry.second.acknowledged;
         // Bound work per service tick and bytes awaiting receiver acknowledgement.
         // The receiver already accepts ordered chunks and acknowledges each offset.
-        for (unsigned sent = 0; sent < (voiceActive ? 1U : FlightBytes / ChunkBytes); ++sent) {
+        for (unsigned sent = 0; sent < FlightBytes / ChunkBytes; ++sent) {
             if (sent && GetTickCount64() - now >= 2) return;
             auto it = uploads.upper_bound(lastServed); if (it == uploads.end()) it = uploads.begin();
             const auto ready = [outstanding](const Upload& u) {
@@ -511,7 +510,6 @@ public:
             if (!transmit(it->first.first,raw)) return;
             crypto_generichash_update(&u.hash,bytes.data(),bytes.size()); u.offset += count; u.cursor += count;
             outstanding += count;
-            lastChunk = now; // Voice: one chunk per 64 ms. Idle: bounded pipelining.
         }
     }
     void peerLeft(int peer) {
@@ -520,5 +518,5 @@ public:
         for (auto& entry : downloads) if (entry.first.first == peer) { if(releaseDownload(entry.second))entry.second.state = "unavailable"; }
         for (auto& entry : sources) entry.second->peers.erase(peer);
     }
-    void clear() { pendingControls.clear(); for(auto& entry:downloads)releaseDownload(entry.second); uploads.clear(); downloads.clear(); sources.clear(); lastChunk = 0; }
+    void clear() { pendingControls.clear(); for(auto& entry:downloads)releaseDownload(entry.second); uploads.clear(); downloads.clear(); sources.clear(); }
 };

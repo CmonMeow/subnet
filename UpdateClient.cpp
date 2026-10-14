@@ -12,6 +12,7 @@ bool launch(const std::wstring& exe,const std::wstring& args) {
     CloseHandle(pi.hThread);CloseHandle(pi.hProcess);return true;
 }
 bool stageName(const std::wstring& path) {
+    // Retain the staging format so older clients can install renamed releases.
     const auto name=path.substr(path.find_last_of(L"\\/")+1);
     if(name.size()!=43 || name.compare(0,11,L".oi-update-")!=0)return false;
     for(size_t i=11;i<name.size();++i)if(!iswxdigit(name[i]))return false;
@@ -76,7 +77,7 @@ void UpdateClient::download(std::string address) {
 }
 bool UpdateClient::prompt(HWND window) {
     if(prompted||!done.load()||stage.empty())return false;prompted=true;
-    if(MessageBoxW(window,L"An oi update is ready. Restart now to install it?",L"Update available",MB_YESNO|MB_ICONINFORMATION)!=IDYES)return false;
+    if(MessageBoxW(window,L"A subnet update is ready. Restart now to install it?",L"Update available",MB_YESNO|MB_ICONINFORMATION)!=IDYES)return false;
     Updates::Manifest manifest;std::vector<unsigned char> image;
     const auto file=stage+L"\\oi.exe";
     Updates::File verified;
@@ -103,9 +104,24 @@ int UpdateClient::startup() {
     if(!Updates::loadManifest(selfFolder+L"\\oi.update",manifest)||manifest.release!=UpdateRelease||!Updates::readFile(self,image)||!Updates::matches(manifest,image))return 2;
     wchar_t* end=nullptr;unsigned long pid=wcstoul(argv[2],&end,10);if(!pid||*end)return 2;
     HANDLE process=OpenProcess(SYNCHRONIZE|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid);
-    if(process){wchar_t path[32768];DWORD n=32768;bool same=QueryFullProcessImageNameW(process,0,path,&n)&&_wcsicmp(path,target.c_str())==0;
-        if(!same){CloseHandle(process);return 2;}DWORD result=WaitForSingleObject(process,120000);CloseHandle(process);if(result!=WAIT_OBJECT_0)return 2;}
+    if(process){
+        // A parent that has already exited may no longer expose its image path.
+        DWORD result=WaitForSingleObject(process,0);
+        if(result==WAIT_TIMEOUT){
+            wchar_t path[32768];DWORD n=32768;
+            if(QueryFullProcessImageNameW(process,0,path,&n)&&_wcsicmp(path,target.c_str())==0)result=WaitForSingleObject(process,120000);
+            else result=WaitForSingleObject(process,0);
+        }
+        CloseHandle(process);if(result!=WAIT_OBJECT_0)return 2;
+    }
     else if(GetLastError()!=ERROR_INVALID_PARAMETER)return 2;
+    const auto name=target.substr(target.find_last_of(L"\\/")+1);
+    const auto installed=_wcsicmp(name.c_str(),L"oi.exe")==0 ? Updates::folder(target)+L"\\subnet.exe" : target;
+    if(installed!=target && GetFileAttributesW(installed.c_str())!=INVALID_FILE_ATTRIBUTES){
+        MessageBoxW(nullptr,L"A subnet.exe already exists in this folder. Move or rename it before updating. Your current executable and backup are unchanged.",L"Update failed",MB_OK|MB_ICONERROR);
+        launch(target,L"--cleanup-update "+quote(selfFolder));
+        return 2;
+    }
     const auto backup=target+L".previous";
     // Do not remove the existing backup until replacement succeeds.
     DWORD attr=GetFileAttributesW(backup.c_str());
@@ -113,17 +129,28 @@ int UpdateClient::startup() {
     const auto ready=selfFolder+L"\\oi.ready";
     const auto temporaryBackup=selfFolder+L"\\oi.previous";
     if(!Updates::writeNew(ready,image.data(),(DWORD)image.size()))return 2;
-    if(!ReplaceFileW(target.c_str(),ready.c_str(),temporaryBackup.c_str(),0,nullptr,nullptr)){DeleteFileW(ready.c_str());return 2;}
+    if(!ReplaceFileW(target.c_str(),ready.c_str(),temporaryBackup.c_str(),0,nullptr,nullptr)){
+        const DWORD error=GetLastError();DeleteFileW(ready.c_str());
+        wchar_t message[160];swprintf_s(message,L"Could not replace the executable (Windows error %lu). Your current version is unchanged.",error);
+        MessageBoxW(nullptr,message,L"Update failed",MB_OK|MB_ICONERROR);return 2;
+    }
     if(!MoveFileExW(temporaryBackup.c_str(),backup.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){
         if(!ReplaceFileW(target.c_str(),temporaryBackup.c_str(),nullptr,0,nullptr,nullptr))
             MessageBoxW(nullptr,L"Could not finish the update. The previous executable remains in the update folder as oi.previous.",L"Update failed",MB_OK|MB_ICONERROR);
         else launch(target,L"--cleanup-update "+quote(selfFolder));
         return 2;
     }
-    if(!launch(target,L"--cleanup-update "+quote(selfFolder))){
-        if(!ReplaceFileW(target.c_str(),backup.c_str(),nullptr,0,nullptr,nullptr))
-            MessageBoxW(nullptr,L"Could not restart or restore oi. Your previous executable is saved with the .previous suffix.",L"Update failed",MB_OK|MB_ICONERROR);
-        else launch(target,L"");
+    if(installed!=target && !MoveFileExW(target.c_str(),installed.c_str(),MOVEFILE_WRITE_THROUGH)){
+        if(ReplaceFileW(target.c_str(),backup.c_str(),nullptr,0,nullptr,nullptr))launch(target,L"--cleanup-update "+quote(selfFolder));
+        return 2;
+    }
+    if(!launch(installed,L"--cleanup-update "+quote(selfFolder))){
+        if(!ReplaceFileW(installed.c_str(),backup.c_str(),nullptr,0,nullptr,nullptr))
+            MessageBoxW(nullptr,L"Could not restart or restore subnet. Your previous executable is saved with the .previous suffix.",L"Update failed",MB_OK|MB_ICONERROR);
+        else {
+            if(installed!=target && MoveFileExW(installed.c_str(),target.c_str(),MOVEFILE_WRITE_THROUGH))launch(target,L"");
+            else launch(installed,L"");
+        }
         return 2;
     }
     return 0;

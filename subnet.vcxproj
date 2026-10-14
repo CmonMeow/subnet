@@ -7,7 +7,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectName>oi</ProjectName>
+    <ProjectName>subnet</ProjectName>
     <ProjectGuid>{D716CB4F-8140-43CE-B53B-7C057DC4DAA2}</ProjectGuid>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -28,7 +28,7 @@
     <_ProjectFileVersion>16.0.34930.59</_ProjectFileVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <TargetName>oi</TargetName>
+    <TargetName>subnet</TargetName>
     <OutDir>$(ProjectDir)bin\</OutDir>
     <IntDir>$(ProjectDir)build\$(Platform)\$(ProjectName)\</IntDir>
     <LinkIncremental>false</LinkIncremental>

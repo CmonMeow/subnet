@@ -15,7 +15,6 @@ class cNetworkRuntime
     unsigned short _hostingPort = DEFAULT_NETWORK_PORT;
     ScreenSignaling _screens;
     FileTransfers _files;
-    ULONGLONG _voiceActiveUntil = 0;
     FileSaveDialog _fileDialog;
     ImageViewer _imageViewer;
     struct FileBudget { double bytes = 32768; double packets = 32; ULONGLONG time = GetTickCount64(); };
@@ -575,7 +574,6 @@ class cNetworkRuntime
         {
             if (saneVoicePacket(voicePacket))
             {
-                _voiceActiveUntil = GetTickCount64() + 2000;
                 queueVoicePacket(voicePacket);
             }
             return;
@@ -701,7 +699,6 @@ class cNetworkRuntime
         {
             if (saneVoicePacket(voicePacket))
             {
-                _voiceActiveUntil = GetTickCount64() + 2000;
                 voicePacket.playerId = from;
                 queueVoicePacket(voicePacket);
                 broadcastVoicePacket(voicePacket, from);
@@ -1500,7 +1497,7 @@ public:
             _latencyMS = counted ? (__int32)(totalLatency / counted) : 0;
             _throughputBPS = counted ? (__int32)(totalThroughput / counted) : 0;
         }
-        _files.update(GetTickCount64() < _voiceActiveUntil);
+        _files.update();
     }
 
     bool trafficTotals(unsigned __int64& incoming, unsigned __int64& outgoing) const
@@ -1730,7 +1727,6 @@ public:
 
     void sendVoice(NetworkVoicePacket packet)
     {
-        if (clientReady() || isHost()) _voiceActiveUntil = GetTickCount64() + 2000;
         if (_client)
         {
             packet.playerId = _localPlayerId;
@@ -1766,7 +1762,7 @@ public:
         if (!_client && !_server) return false;
         if(_disconnectDeadline)return true;
         _screens.clear();
-        _imageViewer.clear(); _files.clear(); _fileRelay.clear(); _fileRelayBytes = 0; _peerBudgets.clear(); _voiceActiveUntil = 0;
+        _imageViewer.clear(); _files.clear(); _fileRelay.clear(); _fileRelayBytes = 0; _peerBudgets.clear();
         _transportConnecting = false;
         _connectDeadline = 0;
         if (_client && !_remoteEnded) sendRawControlFromClient(NAMTDisconnect);

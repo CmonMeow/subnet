@@ -10,11 +10,11 @@ BEGIN
  BEGIN
   BLOCK "040904b0"
   BEGIN
-   VALUE "FileDescription", "oi host directory\0"
+   VALUE "FileDescription", "subnet host directory\0"
    VALUE "FileVersion", "0.1.0.0\0"
-   VALUE "InternalName", "oi-directory\0"
-   VALUE "OriginalFilename", "oi-directory.exe\0"
-   VALUE "ProductName", "oi\0"
+   VALUE "InternalName", "subnet-directory\0"
+   VALUE "OriginalFilename", "subnet-directory.exe\0"
+   VALUE "ProductName", "subnet\0"
   END
  END
  BLOCK "VarFileInfo"

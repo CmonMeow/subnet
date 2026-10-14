@@ -10,7 +10,7 @@ if(!$version -or $version -gt 4294967295 -or (!$PublishOnly -and $version -eq 42
 if(!$PublishOnly){
     ++$version
     Set-Content UpdateRelease.h "#pragma once`n#define UPDATE_RELEASE ${version}L`n#ifndef RC_INVOKED`ninline constexpr unsigned long long UpdateRelease=UPDATE_RELEASE;`n#endif" -Encoding ascii
-    & "$vs\MSBuild\Current\Bin\MSBuild.exe" oi.vcxproj /m /p:Configuration=Release /p:Platform=x64 /v:minimal
+    & "$vs\MSBuild\Current\Bin\MSBuild.exe" subnet.vcxproj /m /p:Configuration=Release /p:Platform=x64 /v:minimal
     if($LASTEXITCODE){throw 'Client build failed; no update published.'}
 }
 New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot 'build') -Force | Out-Null

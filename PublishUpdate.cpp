@@ -26,8 +26,8 @@ int wmain(int argc,wchar_t** argv) {
     wchar_t* end=nullptr;uint64_t version=_wcstoui64(argv[1],&end,10);if(!version||!end||*end)return 1;
     // Keep the exact file locked through resource validation and signing.
     std::vector<unsigned char> protectedKey,image;Updates::File executableLock;
-    if(!Updates::readFile(L"bin\\oi.exe",image,Updates::MaxBytes,&executableLock))return 1;
-    HMODULE module=LoadLibraryExW(L"bin\\oi.exe",nullptr,LOAD_LIBRARY_AS_DATAFILE|LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    if(!Updates::readFile(L"bin\\subnet.exe",image,Updates::MaxBytes,&executableLock))return 1;
+    HMODULE module=LoadLibraryExW(L"bin\\subnet.exe",nullptr,LOAD_LIBRARY_AS_DATAFILE|LOAD_LIBRARY_AS_IMAGE_RESOURCE);
     if(!module)return 1;
     HRSRC resource=FindResourceW(module,MAKEINTRESOURCEW(202),MAKEINTRESOURCEW(10));
     const auto* embedded=resource?(const uint32_t*)LockResource(LoadResource(module,resource)):nullptr;
@@ -41,8 +41,8 @@ int wmain(int argc,wchar_t** argv) {
     Updates::Manifest manifest;manifest.release=version;manifest.bytes=image.size();crypto_hash_sha256(manifest.hash,image.data(),image.size());
     if(ok)crypto_sign_detached(manifest.signature,nullptr,(const unsigned char*)&manifest,offsetof(Updates::Manifest,signature),key.pbData);
     sodium_memzero(key.pbData,key.cbData);LocalFree(key.pbData);if(!ok)return 1;
-    DeleteFileW(L"bin\\oi.update.tmp");
-    if(!Updates::writeNew(L"bin\\oi.update.tmp",&manifest,sizeof(manifest))||!MoveFileExW(L"bin\\oi.update.tmp",L"bin\\oi.update",MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))return 1;
+    DeleteFileW(L"bin\\subnet.update.tmp");
+    if(!Updates::writeNew(L"bin\\subnet.update.tmp",&manifest,sizeof(manifest))||!MoveFileExW(L"bin\\subnet.update.tmp",L"bin\\subnet.update",MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))return 1;
     printf("Published signed release %llu (%llu bytes).\n",manifest.release,manifest.bytes);return 0;
 }
 

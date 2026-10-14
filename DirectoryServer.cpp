@@ -32,7 +32,7 @@ int wmain(int argc,wchar_t** argv) {
         else if(arg==L"--key"&&i+1<argc)keyPath=argv[++i];
         else if(arg==L"--port"&&i+1<argc){wchar_t* end=nullptr;unsigned long n=wcstoul(argv[++i],&end,10);if(!end||*end||n<1||n>65535)return 2;port=(unsigned)n;}
         else if(arg==L"--bind"&&i+1<argc){std::wstring value=argv[++i];bindAddress.clear();for(wchar_t c:value){if(c>127)return 2;bindAddress.push_back(static_cast<char>(c));}}
-        else {fwprintf(stderr,L"Usage: oi-directory [--init] [--key path] [--bind IPv4] [--port 778]\n");return 2;}
+        else {fwprintf(stderr,L"Usage: subnet-directory [--init] [--key path] [--bind IPv4] [--port 778]\n");return 2;}
     }
     if(keyPath.empty()) {
         wchar_t executable[32768];DWORD length=GetModuleFileNameW(nullptr,executable,32768);
@@ -56,7 +56,7 @@ int wmain(int argc,wchar_t** argv) {
     if(ioctlsocket(socket,FIONBIO,&nonblocking)==SOCKET_ERROR){fprintf(stderr,"Cannot make directory socket nonblocking: %d\n",WSAGetLastError());closesocket(socket);WSACleanup();return 2;}
     UpdateServer updates;
     if(updates.start(local,Updates::folder(Updates::executable())))puts("Signed updates available on the directory TCP port.");
-    else puts("Updates disabled: no matching signed oi.exe/oi.update, or TCP bind failed.");
+    else puts("Updates disabled: no matching signed subnet.exe/subnet.update, or TCP bind failed.");
     unsigned char cookieKey[32];randombytes_buf(cookieKey,sizeof(cookieKey));
     auto cookie=[&](const sockaddr_in& from,const Packet& p,ULONGLONG bucket,unsigned char* out){
         unsigned char input[30]={};memcpy(input,&from.sin_addr.s_addr,4);memcpy(input+4,&from.sin_port,2);memcpy(input+6,p.nonce,16);memcpy(input+22,&bucket,8);

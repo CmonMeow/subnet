@@ -10,7 +10,7 @@
 using Microsoft::WRL::ComPtr;
 using Microsoft::WRL::Callback;
 namespace {
-const wchar_t* const ScreenUrl=L"https://oi/";
+const wchar_t* const ScreenUrl=L"https://subnet/";
 constexpr UINT FocusScreenMessage=WM_APP+1;
 constexpr UINT ChooseScreenMessage=WM_APP+2;
 constexpr UINT FailedScreenMessage=WM_APP+3;
@@ -84,10 +84,10 @@ struct ScreenShare::State : std::enable_shared_from_this<ScreenShare::State>
             if(process!=(DWORD)browser||!IsWindowVisible(candidate))return TRUE;
             wchar_t cls[64],title[128];GetClassNameW(candidate,cls,64);GetWindowTextW(candidate,title,128);
             if(wcscmp(cls,L"Chrome_WidgetWin_1")!=0)return TRUE;
-            if(wcscmp(title,L"oi is sharing a window.")!=0&&
-               wcscmp(title,L"oi is sharing a window and audio.")!=0&&
-               wcscmp(title,L"oi is sharing your screen.")!=0&&
-               wcscmp(title,L"oi is sharing your screen and audio.")!=0)return TRUE;
+            if(wcscmp(title,L"subnet is sharing a window.")!=0&&
+               wcscmp(title,L"subnet is sharing a window and audio.")!=0&&
+               wcscmp(title,L"subnet is sharing your screen.")!=0&&
+               wcscmp(title,L"subnet is sharing your screen and audio.")!=0)return TRUE;
             ShowWindowAsync(candidate,SW_HIDE);return TRUE;
         },(LPARAM)browser);
     }
@@ -187,7 +187,7 @@ struct ScreenShare::State : std::enable_shared_from_this<ScreenShare::State>
         if(!window){error("Could not open the screen-share window.",HRESULT_FROM_WIN32(GetLastError()));return false;}
         wchar_t folder[32768];DWORD count=GetEnvironmentVariableW(L"LOCALAPPDATA",folder,32768);
         if(!count||count>=32768){error("Could not locate the screen viewer's data folder.");PostMessageW(window,WM_CLOSE,0,0);return false;}
-        std::wstring profile=std::wstring(folder)+L"\\oi\\ScreenShare";
+        std::wstring profile=std::wstring(folder)+L"\\subnet\\ScreenShare";
         const unsigned current=++generation;std::weak_ptr<State> weak=shared_from_this();
         HRESULT result=CreateCoreWebView2EnvironmentWithOptions(nullptr,profile.c_str(),nullptr,
             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([weak,current](HRESULT result,ICoreWebView2Environment* env)->HRESULT {

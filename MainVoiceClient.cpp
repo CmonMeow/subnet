@@ -180,12 +180,12 @@ int main()
 {
     const int updateResult=UpdateClient::startup();
     if(updateResult>=0){
-        if(updateResult)MessageBoxW(nullptr,L"The update could not be completed. Check oi.exe and its .previous backup before retrying.",L"Update failed",MB_OK|MB_ICONERROR);
+        if(updateResult)MessageBoxW(nullptr,L"The update could not be completed. Check the executable and its .previous backup before retrying.",L"Update failed",MB_OK|MB_ICONERROR);
         return updateResult;
     }
     if (!SetClientDirectory())
     {
-        MessageBoxW(nullptr, L"Could not open the oi folder.", L"Startup failed", MB_OK | MB_ICONERROR);
+        MessageBoxW(nullptr, L"Could not open the subnet folder.", L"Startup failed", MB_OK | MB_ICONERROR);
         return EXIT_FAILURE;
     }
     FreeConsole();

@@ -28,11 +28,11 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "FileDescription", "oi chat, voice and screen sharing\0"
+            VALUE "FileDescription", "subnet chat, voice and screen sharing\0"
             VALUE "FileVersion", "0.1.0.0\0"
-            VALUE "InternalName", "oi\0"
-            VALUE "OriginalFilename", "oi.exe\0"
-            VALUE "ProductName", "oi\0"
+            VALUE "InternalName", "subnet\0"
+            VALUE "OriginalFilename", "subnet.exe\0"
+            VALUE "ProductName", "subnet\0"
             VALUE "ProductVersion", "0.1.0.0\0"
         END
     END

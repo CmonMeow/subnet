@@ -87,7 +87,7 @@ public:
                 // Old files keep the built-in server default.
                 char address[256] = {};
                 if (file.getline(address, sizeof(address)) && address[0])
-                    serverAddress = address;
+                    serverAddress = _stricmp(address, "nigger.observer") == 0 ? DEFAULT_NETWORK_ADDRESS : address;
                 char name[34]={};
                 if(file.getline(name,sizeof(name))&&HostDirectory::validName(name))hostName=name;
                 char entry[64];

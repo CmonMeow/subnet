@@ -15,7 +15,7 @@ public:
     ~UpdateServer(){for(auto& p:peers)close(p);if(listener!=INVALID_SOCKET)closesocket(listener);}
     bool start(sockaddr_in address,const std::wstring& directory) {
         Updates::Manifest manifest;std::vector<unsigned char> image;
-        if(!Updates::loadManifest(directory+L"\\oi.update",manifest)||!Updates::readFile(directory+L"\\oi.exe",image)||!Updates::matches(manifest,image))return false;
+        if(!Updates::loadManifest(directory+L"\\subnet.update",manifest)||!Updates::readFile(directory+L"\\subnet.exe",image)||!Updates::matches(manifest,image))return false;
         release.resize(sizeof(manifest)+image.size());memcpy(release.data(),&manifest,sizeof(manifest));memcpy(release.data()+sizeof(manifest),image.data(),image.size());
         listener=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);if(listener==INVALID_SOCKET)return false;
         BOOL exclusive=TRUE;setsockopt(listener,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,(const char*)&exclusive,sizeof(exclusive));
