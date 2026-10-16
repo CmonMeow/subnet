@@ -27,11 +27,11 @@ class ImageViewer
         for(int y=0;y<22;++y)for(int x=0;x<32;++x){
             auto* pixel=data+(y*32+x)*4;
             for(int c=0;c<3;++c)pixel[c]=(unsigned char)(pixel[c]/2+3);
-            if(x==0 || x==31 || y==0 || y==21)for(int c=0;c<3;++c)pixel[c]=hover?204:89;
+            if(x==0 || x==31 || y==0 || y==21){pixel[0]=hover?255:89;pixel[1]=hover?217:89;pixel[2]=89;}
         }
         const auto& glyph=serif['X'-32];
         for(int y=0;y<16;++y)for(int x=0;x<16;++x)if(glyph[(15-y)*2+x/8]&(128>>(x%8))){
-            auto* pixel=data+((3+y)*32+8+x)*4;pixel[0]=245;pixel[1]=250;pixel[2]=235;
+            auto* pixel=data+((3+y)*32+8+x)*4;pixel[0]=hover?255:245;pixel[1]=hover?217:250;pixel[2]=hover?89:235;
         }
         BitBlt(dc,rect.left,0,32,22,buffer,0,0,SRCCOPY);
         SelectObject(buffer,old);DeleteDC(buffer);DeleteObject(bitmap);

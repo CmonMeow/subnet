@@ -127,8 +127,8 @@ class cNetworkRuntime
     }
     void announceFile(int from, const string& id) {
         const bool image=_files.isImage({from,id});
-        addChatLine((from < 0 ? string("You") : playerDisplayName(from)) + (image ? " offered an image:" : " offered a file:"),CLKSystem);
         NetworkChatLine line; line.kind = image ? CLKImage : CLKFile; line.fileSender = from; line.fileId = id;
+        line.text=(from<0?string("You"):playerDisplayName(from))+": "+_files.link({from,id}).title;
         line.historyId = ++_nextChatLineId; GetLocalTime(&line.receivedAt);
         _chatLines.push_back(line);
         while (_chatLines.size() > CHAT_MAX_HISTORY_LINES) _chatLines.erase(_chatLines.begin());
@@ -1419,6 +1419,7 @@ public:
             },
             [this](int owner,const string& id) {
                 NetworkChatLine line; line.kind=CLKScreen; line.fileSender=owner; line.fileId=id;
+                line.text=(owner==localPlayerId()?string("You"):playerDisplayName(owner))+": screen";
                 line.historyId = ++_nextChatLineId; GetLocalTime(&line.receivedAt);
                 _chatLines.push_back(line);
                 if(_chatLines.size()>CHAT_MAX_HISTORY_LINES) _chatLines.erase(_chatLines.begin());
@@ -1846,14 +1847,17 @@ public:
     std::function<void(int,const string&)> openScreen;
     void sendScreenEvent(const ScreenSignaling::Event& event) { if(isHost() || clientReady()) _screens.send(event); }
     bool popScreenEvent(ScreenSignaling::Event& event) { return _screens.pop(event); }
-    string screenLabel(int owner,const string& id) const {
-        return playerDisplayName(owner) + " screen [" + (_screens.available(owner,id) ? "watch" : "ended") + "]";
+    ChatLink chatLink(const NetworkChatLine& line) const {
+        if(line.kind==CLKScreen){
+            if(!_screens.available(line.fileSender,line.fileId))return {line.text,"ended",""};
+            return line.fileSender==localPlayerId()?ChatLink{line.text,"sharing",""}:ChatLink{line.text,"","watch"};
+        }
+        auto link=_files.link({line.fileSender,line.fileId});link.title=line.text;return link;
     }
     void clickScreen(int owner,const string& id) {
         if(_screens.available(owner,id) && openScreen) openScreen(owner,id);
         else showNotice("This screen share has ended.",true);
     }
-    string fileLabel(int from, const string& id) const { return _files.label({from,id}); }
     void clickFile(int from, const string& id) {
         if (from == -1) { _files.withdraw(id); return; }
         const FileTransfers::Key key(from,id);

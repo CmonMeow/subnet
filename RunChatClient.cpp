@@ -29,16 +29,20 @@ static bool ChatButtonHovered(vec2i pos)
            y >= pos.y && y < pos.y + 22;
 }
 
-static void DrawChatButton(const char* text, vec2i pos, bool on, bool speaking = false)
+static void DrawChatButton(const char* text, vec2i pos, bool on, bool speaking = false, vec3f textColor = vec3f(.92f, .98f, .96f))
 {
     QueueChatRect((float)pos.x, (float)pos.y, (float)pos.x + 128.f, (float)pos.y + 22.f,
-                  on ? 0.f : .02f, on ? .26f : .02f, on ? .23f : .02f, .50f, false);
-    if(ChatButtonHovered(pos)) ChatCursorResource=IDC_POINTER_GREEN;
-    const float border = speaking ? 1.f : ChatButtonHovered(pos) ? .8f : .35f;
+                  .02f, speaking ? .42f : on ? .10f : .02f, speaking ? .62f : on ? .24f : .02f, .50f, false);
+    const bool hovered=ChatButtonHovered(pos);
+    if(hovered) ChatCursorResource=IDC_POINTER_GREEN;
+    const bool highlighted=on || speaking || hovered;
+    const float brightness=speaking || hovered ? 1.f : .8f;
     QueueChatRect((float)pos.x, (float)pos.y, (float)pos.x + 128.f, (float)pos.y + 22.f,
-                  speaking ? .3f : border, border, speaking ? .8f : border, .95f, true);
+                  highlighted ? .35f*brightness : .35f, highlighted ? .85f*brightness : .35f, highlighted ? brightness : .35f, .95f, true);
+    if(speaking)textColor=vec3f(.92f,.98f,1.f);
+    else if(highlighted)textColor=vec3f(.35f,.85f,1.f);
     const float textX = (float)pos.x + (128.f - (float)ChatTextWidth(text)) * .5f;
-    QueueChatText(text, textX, (float)pos.y + 5.f, .92f, .98f, .96f);
+    QueueChatText(text, textX, (float)pos.y + 5.f, textColor.x, textColor.y, textColor.z);
 }
 
 #include "ClientSettings.h"
@@ -61,40 +65,76 @@ struct ChatStatusView
     vector<ChatParticipantView> people;
 };
 
+class ParticipantOrder {
+    struct Activity { bool speaking=false; unsigned long long lastSpoke=0; };
+    std::map<int,Activity> activity;
+    unsigned long long sequence=0;
+public:
+    void apply(vector<ChatParticipantView>& people) {
+        for(auto it=activity.begin();it!=activity.end();){
+            if(std::none_of(people.begin(),people.end(),[&](const auto& p){return p.id==it->first;}))it=activity.erase(it);
+            else ++it;
+        }
+        if(people.empty()){sequence=0;return;}
+        for(const auto& person:people){
+            auto& state=activity[person.id];
+            if(person.speaking && !state.speaking)state.lastSpoke=++sequence;
+            state.speaking=person.speaking;
+        }
+        std::stable_sort(people.begin(),people.end(),[&](const auto& a,const auto& b){
+            if(a.local!=b.local)return a.local;
+            return activity.at(a.id).lastSpoke>activity.at(b.id).lastSpoke;
+        });
+    }
+};
+
 class ParticipantVolume {
     struct Row {int id;float x,y,width;string label;};
     vector<Row> rows;
     size_t offset=0;
+    int layoutWidth=0,layoutHeight=0,layoutRows=0;
     int player=-1;float x=0,y=0;Row owner={};bool dragging=false;
     static bool hit(float x,float y,float width,float height) {
         const int mouseY=App.size.y-input.mouse.y;
-        return input.mouse.x>=x&&input.mouse.x<=x+width&&mouseY>=y&&mouseY<=y+height;
+        return input.mouse.x>=x&&input.mouse.x<x+width&&mouseY>=y&&mouseY<y+height;
     }
 public:
     void beginRows(){rows.clear();}
     size_t first(size_t count){if(offset>=count)offset=0;return offset;}
     void row(int id,float x,float y,float width,const string& label=""){rows.push_back({id,x,y,width,label});}
-    bool update(cNetworkRuntime& network,cVoiceChat& voice,PackedClientSettings& settings,bool focused) {
+    bool update(cNetworkRuntime& network,cVoiceChat& voice,PackedClientSettings& settings,bool focused,int nameRows) {
+        if(layoutWidth!=App.size.x || layoutHeight!=App.size.y || layoutRows!=nameRows){
+            layoutWidth=App.size.x;layoutHeight=App.size.y;layoutRows=nameRows;
+            rows.clear();player=-1;dragging=false;
+        }
         if(!focused){player=-1;dragging=false;return false;}
-        if(!dragging&&hit(12,(float)App.size.y-56,(float)App.size.x-24,22)){
+        if(player>=0){
+            bool present=false;for(const auto& p:network.participants())if(p.first==player)present=true;
+            if(!present){player=-1;dragging=false;input.KeyUp(VK_LBUTTON);return true;}
+            for(const auto& row:rows)if(row.id==player){owner=row;break;}
+        }
+        const bool overPopup=player>=0&&hit(x,y,200,44);
+        if(!dragging&&!overPopup&&hit(12,(float)App.size.y-56-(nameRows-1)*18,(float)App.size.x-24,22.f+(nameRows-1)*18.f)){
             const int wheel=input.ConsumeMouseWheel();
             if(wheel){if(wheel<0)++offset;else if(offset)--offset;player=-1;return true;}
-            for(const auto& r:rows)if(r.id==-2&&hit(r.x,r.y-2,r.width,20)&&input.leftClick()){
+            for(const auto& r:rows)if(r.id==-2&&hit(r.x,r.y-2,r.width,18)&&input.leftClick()){
                 ++offset;player=-1;input.KeyUp(VK_LBUTTON);return true;
             }
         }
-        bool present=false;for(const auto& p:network.participants())if(p.first==player)present=true;
-        if(!present){player=-1;dragging=false;}
-        const bool over=player>=0&&hit(x,y,200,44);
-        if(!dragging&&!over&&!(player>=0&&hit(owner.x,owner.y-2,owner.width,20))) {
+        // Keep an open popup anchored while it is being used. Otherwise resolve
+        // the current row under the mouse, not the selected user's old position.
+        if(!dragging&&!overPopup) {
             player=-1;
-            for(const auto& row:rows)if(row.id!=network.localPlayerId()&&hit(row.x,row.y-2,row.width,20)){
+            for(const auto& row:rows)if(row.id!=network.localPlayerId()&&hit(row.x,row.y-2,row.width,18)){
                 bool exists=false;for(const auto& p:network.participants())if(p.first==row.id)exists=true;
                 if(!exists)continue;
                 owner=row;player=row.id;x=(std::max)(4.f,(std::min)(row.x,(float)App.size.x-204));y=row.y-46;break;
             }
         }
         if(player<0)return false;
+        if(dragging && !(GetAsyncKeyState(VK_LBUTTON)&0x8000)){
+            dragging=false;input.KeyUp(VK_LBUTTON);return true;
+        }
         if(hit(x,y,200,44)&&input.leftClick()){
             if(hit(x+6,y+2,188,20))dragging=true;
             else {input.KeyUp(VK_LBUTTON);return true;}
@@ -103,7 +143,6 @@ public:
             const int percent=(int)((input.mouse.x-(x+12))*200/176+.5f);
             voice.setUserVolume(player,percent,network,settings);
             input.KeyUp(VK_LBUTTON);
-            if(!(GetAsyncKeyState(VK_LBUTTON)&0x8000)&&GetCapture()!=GetActiveWindow())dragging=false;
             return true;
         }
         if(hit(x,y,200,44)){
@@ -118,18 +157,18 @@ public:
         if(hit(x,y,200,44))ChatCursorResource=hit(x+6,y+2,188,20)?IDC_POINTER_GREEN:IDC_POINTER_CYAN;
         const int percent=voice.userVolume(player);
         QueueChatRect(x,y,x+200,y+44,.06f,.07f,.07f,1.f,false);
-        QueueChatRect(x,y,x+200,y+44,.35f,.45f,.4f,1.f,true);
+        QueueChatRect(x,y,x+200,y+44,.35f,.85f,1.f,1.f,true);
         const string value=percent?std::to_string(percent)+"%":"Muted";
         const string title=FitChatText(owner.label.empty()?"Volume":owner.label,180-ChatTextWidth(value)-6)+" "+value;
-        QueueChatText(title.c_str(),x+10,y+25,.9f,.94f,.92f);
-        QueueChatRect(x+12,y+10,x+188,y+13,.25f,.3f,.28f,1.f,false);
+        QueueChatText(title.c_str(),x+10,y+25,.96f,.96f,.96f);
+        QueueChatRect(x+12,y+10,x+188,y+13,.02f,.10f,.24f,1.f,false);
         const float thumb=x+12+176*percent/200.f;
-        QueueChatRect(x+12,y+10,thumb,y+13,.3f,.9f,.7f,1.f,false);
-        QueueChatRect(thumb-3,y+5,thumb+3,y+18,.8f,1.f,.9f,1.f,false);
+        QueueChatRect(x+12,y+10,thumb,y+13,.35f,.85f,1.f,1.f,false);
+        QueueChatRect(thumb-3,y+5,thumb+3,y+18,.65f,.92f,1.f,1.f,false);
     }
 };
 
-static ChatStatusView MakeChatStatus(const cNetworkRuntime& network, const cVoiceChat& voice)
+static ChatStatusView MakeChatStatus(const cNetworkRuntime& network, const cVoiceChat& voice, ParticipantOrder& order)
 {
     ChatStatusView view;
     view.online = network.isHost() || network.clientReady();
@@ -143,13 +182,11 @@ static ChatStatusView MakeChatStatus(const cNetworkRuntime& network, const cVoic
         view.people.push_back({person.first, FitChatText(person.second, 210 - ChatTextWidth(suffix)) + suffix, local, voice.speaking(person.first, network)});
     }
     if (view.online) view.status = std::to_string(view.people.size()) + (view.people.size() == 1 ? " user" : " users");
-    std::stable_sort(view.people.begin(), view.people.end(), [](const auto& a, const auto& b) {
-        return (a.local ? 0 : a.speaking ? 1 : 2) < (b.local ? 0 : b.speaking ? 1 : 2);
-    });
+    order.apply(view.people);
     return view;
 }
 
-static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volumes, size_t historyOffset = 0, bool showPeople = true)
+static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volumes, size_t historyOffset = 0, bool showPeople = true, int nameRows = 1)
 {
     volumes.beginRows();
     const string history = historyOffset ? " | history +" + std::to_string(historyOffset) : "";
@@ -165,12 +202,14 @@ static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volume
         QueueChatText(view.connecting || view.online ? "Waiting for server..." : "Type /connect or /host to begin", x, y, .43f, .51f, .48f);
         return;
     }
+    int row=0;
     for (size_t i = volumes.first(view.people.size()); i < view.people.size(); ++i)
     {
         const auto& person = view.people[i];
         string label = FitChatText(person.label, 210);
         const int width = ChatTextWidth(label) + 24;
-        const int reserve = i + 1 < view.people.size() ? 105 : 0;
+        if(row+1<nameRows && x+width>App.size.x-20){x=20.f;y-=18.f;++row;}
+        const int reserve = row+1==nameRows && i + 1 < view.people.size() ? 105 : 0;
         if (x + width + reserve > App.size.x - 20)
         {
             string more = "+" + std::to_string(view.people.size() - i) + " more";
@@ -179,8 +218,8 @@ static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volume
             break;
         }
         if(!person.local)volumes.row(person.id,x,y,(float)width,label);
-        QueueChatText(person.speaking ? "*" : "-", x, y, person.speaking ? .3f : .38f, person.speaking ? 1.f : .46f, person.speaking ? .8f : .43f);
-        QueueChatText(label.c_str(), x + 16.f, y, person.speaking ? .72f : .57f, person.speaking ? 1.f : .66f, person.speaking ? .90f : .62f);
+        QueueChatText(person.speaking ? "*" : "-", x, y, person.speaking ? .35f : .38f, person.speaking ? .85f : .46f, person.speaking ? 1.f : .43f);
+        QueueChatText(label.c_str(), x + 16.f, y, person.speaking ? .65f : .57f, person.speaking ? .92f : .66f, person.speaking ? 1.f : .62f);
         x += width + 12;
     }
 }
@@ -249,6 +288,7 @@ void RunChatClient(HWND hWnd)
         if(!chimeCooldown.focused) voiceChat.messageChime();
     };
     ParticipantVolume userVolumes;
+    ParticipantOrder participantOrder;
     ScreenShare screenShare(hWnd,
         [&](const ScreenSignaling::Event& event){ network.sendScreenEvent(event); },
         [&](const string& message,bool error){ network.showNotice(message,error); });
@@ -372,7 +412,9 @@ void RunChatClient(HWND hWnd)
             input.Clear();
             voiceChat.resetTransmitMode();
         }
-        const bool volumeInput=modal || userVolumes.update(network,voiceChat,settings,GetForegroundWindow()==hWnd);
+        const int nameRows=IsZoomed(hWnd)?2:1;
+        chatBox.nameRows(nameRows);
+        const bool volumeInput=modal || userVolumes.update(network,voiceChat,settings,GetForegroundWindow()==hWnd,nameRows);
         if (releaseHotkey && !(GetAsyncKeyState(releaseHotkey) & 0x8000)) releaseHotkey = 0;
         if (!selectingHotkey && !releaseHotkey && !volumeInput) chatBox.update(network);
         input.ConsumeMouseWheel();
@@ -396,12 +438,12 @@ void RunChatClient(HWND hWnd)
             ChatCursorResource=!browser.shown(network) && chatBox.linkHovered(network) ? IDC_POINTER_YELLOW : IDC_POINTER_CYAN;
             background.draw(App.size.x, App.size.y);
             chatBox.draw(network, GetForegroundWindow() == hWnd, !browser.shown(network));
-            DrawChatStatus(MakeChatStatus(network, voiceChat), userVolumes, chatBox.historyOffset(), !browser.shown(network));
+            DrawChatStatus(MakeChatStatus(network, voiceChat, participantOrder), userVolumes, chatBox.historyOffset(), !browser.shown(network),nameRows);
             browser.draw(network,directory);
             DrawChatButton(voiceChat.micEnabled() ? "MIC ON" : "MIC OFF",
                                         micButton, voiceChat.micEnabled(), voiceChat.transmitting(network));
             DrawChatButton(selectingHotkey ? "PRESS KEY" : settings.talkKeyLabel().c_str(), hotkeyButton, selectingHotkey);
-            DrawChatButton(!network.hasConnection() ? "HOST" : screenShare.watching() ? "STOP WATCH" : screenShare.sharing() ? "STOP SHARE" : "SCREEN",screenButton,screenShare.sharing());
+            DrawChatButton(!network.hasConnection() ? "HOST" : screenShare.watching() ? "STOP WATCH" : screenShare.sharing() ? "STOP SHARE" : "SCREEN",screenButton,screenShare.sharing() || screenShare.watching());
             userVolumes.draw(voiceChat);
             const HCURSOR cursor=ChatCursorResource==IDC_POINTER_GREEN ? greenCursor : ChatCursorResource==IDC_POINTER_YELLOW ? yellowCursor : cyanCursor;
             if(reinterpret_cast<HCURSOR>(GetClassLongPtrA(hWnd,GCLP_HCURSOR))!=cursor)

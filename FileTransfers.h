@@ -2,6 +2,7 @@
 #include "NetworkProtocol.h"
 #include "FileIoQueue.h"
 #include "TransferProgress.h"
+#include "ChatLink.h"
 #include "Screenshot.h"
 #include <atomic>
 #include <functional>
@@ -257,28 +258,33 @@ public:
                 ((stem[3]>=L'1' && stem[3]<=L'9') || stem[3]==0xb9 || stem[3]==0xb2 || stem[3]==0xb3));
         return device ? L"download-"+name : name;
     }
-    string label(const Key& key) const {
+    ChatLink link(const Key& key) const {
         string name, state; unsigned __int64 bytes;
         if (key.first == -1) {
-            auto it = sources.find(key.second); if (it == sources.end()) return "File offer withdrawn or expired";
-            name = it->second->name; bytes = it->second->size; state = "offered/cancel";
+            auto it = sources.find(key.second); if (it == sources.end()) return {"","expired or withdrawn",""};
+            name = it->second->name; bytes = it->second->size; state = "offered";
             bool sending=false,unknown=false;long long remaining=0;
             for(const auto& upload:uploads)if(upload.first.second==key.second){sending=true;auto eta=upload.second.progress.remaining(bytes,upload.second.acknowledged,GetTickCount64());if(eta<0)unknown=true;else remaining=(std::max)(remaining,eta);}
-            if(sending)state=TransferProgress::eta(unknown?-1:remaining)+" cancel";
+            if(sending)state=TransferProgress::eta(unknown?-1:remaining);
         } else {
-            auto it = downloads.find(key); if (it == downloads.end()) return "File offer expired";
+            auto it = downloads.find(key); if (it == downloads.end()) return {"","expired",""};
             const auto& d = it->second; name = d.name; bytes = d.size;
-            state = d.file ? std::to_string(d.size ? (unsigned long long)d.offset * 100 / d.size : 0) + "% "+(d.finishing?string(d.image?"validating":"saving"):TransferProgress::eta(d.progress.remaining(d.size,d.offset,GetTickCount64())))+" cancel" : d.state;
+            state = d.file ? std::to_string(d.size ? (unsigned long long)d.offset * 100 / d.size : 0) + "% "+(d.finishing?string(d.image?"validating":"saving"):TransferProgress::eta(d.progress.remaining(d.size,d.offset,GetTickCount64()))) : d.state;
         }
-        name = displayName(name); if (name.size() > 25) name = name.substr(0,12) + "..." + name.substr(name.size()-10);
+        name = displayName(name);
         char size[32];
         // Windows labels binary file-size units KB/MB/GB and truncates the displayed fraction.
         if (bytes >= 1073741824ULL) snprintf(size,sizeof(size),"%.2f GB",(bytes*100/1073741824ULL)/100.0);
         else if (bytes >= 1048576) snprintf(size,sizeof(size),"%.2f MB",(bytes*100/1048576)/100.0);
         else if (bytes >= 1024) snprintf(size,sizeof(size),"%.2f KB",(bytes*100/1024)/100.0);
         else snprintf(size,sizeof(size),"%llu B",bytes);
-        if (isImage(key)) return "[image] (" + string(size) + ") [" + (state=="save" || state=="view" ? "view" : state) + "]";
-        return name + " (" + size + ") [" + state + "]";
+        ChatLink result{(isImage(key)?string("image"):name)+" ("+size+")",state,""};
+        if(key.first==-1)result.action="cancel";
+        else if(active(key)){if(downloads.at(key).file->phase.load()==0)result.action="cancel";}
+        else if(state=="save" || state=="view"){
+            result.action=isImage(key)?"view":"save";result.status.clear();
+        }
+        return result;
     }
     void withdraw(const string& id) {
         auto source = sources.find(id); if (source == sources.end()) return;

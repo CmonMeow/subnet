@@ -17,6 +17,7 @@ class cChatBox
     size_t _cursor;
     size_t _inputViewStart;
     size_t _scrollOffset;
+    int _nameRows=1;
     enum
     {
         BOX_X = 12,
@@ -30,9 +31,25 @@ class cChatBox
         HISTORY_WHEEL_LINES = 3
     };
 
+    static string fitLink(ChatLink link,int width) {
+        const string action=link.action.empty()?"":"["+link.action+"]";
+        const int reserved=action.empty()?0:ChatTextWidth(action)+6;
+        if(reserved>width)return "";
+        const size_t tailSize=(std::min)(size_t(28),link.title.size()/3);
+        const string tail=link.title.size()>18?link.title.substr(link.title.size()-tailSize):"";
+        if(ChatTextWidth(link.text())>width && !tail.empty()){
+            string head=link.title.substr(0,link.title.size()-tailSize);
+            const string suffix="..."+tail+(link.status.empty()?"":" - "+link.status);
+            while(!head.empty() && ChatTextWidth(head+suffix)+reserved>width)head.pop_back();
+            link.title=head+"..."+tail;
+        }
+        string description=link.title+(link.status.empty()?"":" - "+link.status);
+        description=FitChatText(description,width-reserved);
+        return description+(description.empty()||action.empty()?"":" ")+action;
+    }
     string historyText(const cNetworkRuntime& network,const NetworkChatLine& line) const {
-        if(line.kind==CLKFile || line.kind==CLKImage)return FitChatText(network.fileLabel(line.fileSender,line.fileId),(int)boxWidth()-24);
-        if(line.kind==CLKScreen)return FitChatText(network.screenLabel(line.fileSender,line.fileId),(int)boxWidth()-24);
+        if(line.kind==CLKFile || line.kind==CLKImage || line.kind==CLKScreen)
+            return fitLink(network.chatLink(line),(int)boxWidth()-24);
         return line.text;
     }
     bool historyPoint(const cNetworkRuntime& network,ChatSelection::Point& point,bool clamp=false) const {
@@ -200,7 +217,7 @@ class cChatBox
 
     size_t visibleRows() const
     {
-        return (size_t)(std::max)(1, (App.size.y - 68 - BOX_Y - INPUT_HEIGHT - 18) / LINE_HEIGHT);
+        return (size_t)(std::max)(1, (App.size.y - 68 - (_nameRows-1)*18 - BOX_Y - INPUT_HEIGHT - 18) / LINE_HEIGHT);
     }
 
     float boxWidth() const
@@ -292,37 +309,24 @@ class cChatBox
 
     static bool FindNextUrl(const string& line, size_t searchFrom, size_t& urlStart, size_t& urlEnd)
     {
-        const char* prefixes[] = { "http://", "https://", "www." };
-        size_t best = string::npos;
-        for (size_t p = 0; p < 3; ++p)
-        {
-            size_t found = line.find(prefixes[p], searchFrom);
-            if (found != string::npos && (best == string::npos || found < best))
-            {
-                best = found;
+        for(size_t start=searchFrom;start<line.size();++start){
+            if(start && (isalnum((unsigned char)line[start-1]) || line[start-1]=='_'))continue;
+            size_t prefix=0;
+            for(const char* scheme:{"http://","https://","www."})
+                if(_strnicmp(line.c_str()+start,scheme,strlen(scheme))==0){prefix=strlen(scheme);break;}
+            if(!prefix || start+prefix>=line.size())continue;
+            const char host=line[start+prefix];
+            if(!isalnum((unsigned char)host))continue;
+            size_t end=start;int parentheses=0;
+            while(end<line.size() && IsUrlChar(line[end])){
+                if(line[end]=='(')++parentheses;
+                if(line[end]==')'){if(!parentheses)break;--parentheses;}
+                ++end;
             }
+            while(end>start+prefix && (line[end-1]=='.'||line[end-1]==','||line[end-1]==';'))--end;
+            urlStart=start;urlEnd=end;return true;
         }
-        if (best == string::npos)
-        {
-            return false;
-        }
-
-        size_t end = best;
-        while (end < line.size() && IsUrlChar(line[end]))
-        {
-            ++end;
-        }
-        while (end > best && (line[end - 1] == '.' || line[end - 1] == ',' || line[end - 1] == ')' || line[end - 1] == ';'))
-        {
-            --end;
-        }
-        if (end <= best)
-        {
-            return false;
-        }
-        urlStart = best;
-        urlEnd = end;
-        return true;
+        return false;
     }
 
     static bool UrlAtCharacter(const string& text, size_t character, string& url)
@@ -331,12 +335,24 @@ class cChatBox
         while(FindNextUrl(text,offset,start,end)) {
             if(character>=start && character<end) {
                 url=text.substr(start,end-start);
-                if(url.compare(0,4,"www.")==0)url="http://"+url;
+                if(_strnicmp(url.c_str(),"www.",4)==0)url="http://"+url;
                 return true;
             }
             offset=end;
         }
         url.clear();return false;
+    }
+
+    static void DrawOfferLink(const ChatLink& link,const string& label,float x,float y)
+    {
+        const string action=link.action.empty()?string():"["+link.action+"]";
+        const size_t actionStart=!action.empty() && label.size()>=action.size()
+            ? label.size()-action.size() : label.size();
+        const bool inactive=link.action.empty() && link.status!="sharing";
+        QueueChatText(label.substr(0,actionStart).c_str(),x,y,
+            inactive?.58f:.96f,inactive?.62f:.96f,inactive?.62f:.96f);
+        if(actionStart<label.size())
+            QueueChatText(action.c_str(),x+ChatTextWidth(label.substr(0,actionStart)),y,.35f,.85f,1.f);
     }
 
     static void DrawChatLineWithLinks(const NetworkChatLine& row, float x, float y, float r, float g, float b)
@@ -350,7 +366,7 @@ class cChatBox
             if(end<=first)continue;
             start=(std::max)(start,first);end=(std::min)(end,last);
             if(start>drawn)QueueChatText(text.substr(drawn,start-drawn).c_str(),x+ChatTextWidth(text.substr(first,drawn-first)),y,r,g,b);
-            QueueChatText(text.substr(start,end-start).c_str(),x+ChatTextWidth(text.substr(first,start-first)),y,1.f,.92f,.22f);
+            QueueChatText(text.substr(start,end-start).c_str(),x+ChatTextWidth(text.substr(first,start-first)),y,.35f,.85f,1.f);
             drawn=end;
         }
         if(drawn<last)QueueChatText(text.substr(drawn,last-drawn).c_str(),x+ChatTextWidth(text.substr(first,drawn-first)),y,r,g,b);
@@ -369,20 +385,17 @@ class cChatBox
         for (size_t i = first; i < newestExclusive; ++i)
         {
             const float lineY = textTop - (float)(i - first) * LINE_HEIGHT;
-            if (mouseY >= lineY - 2.f && mouseY <= lineY + LINE_HEIGHT - 2.f && mouseX >= BOX_X + 8.f)
+            if (mouseY >= lineY - 2.f && mouseY <= lineY + LINE_HEIGHT - 2.f && mouseX >= BOX_X + 8.f && mouseX < BOX_X+boxWidth()-8.f)
             {
-                if (lines[i].kind == CLKScreen)
-                {
-                    const string label=FitChatText(network.screenLabel(lines[i].fileSender,lines[i].fileId),(int)boxWidth()-24);
-                    if(mouseX < BOX_X+8.f+ChatTextWidth(label)) { if(activate) network.clickScreen(lines[i].fileSender,lines[i].fileId); return true; }
-                    continue;
-                }
-                if (lines[i].kind == CLKFile || lines[i].kind == CLKImage)
-                {
-                    const string label = FitChatText(network.fileLabel(lines[i].fileSender,lines[i].fileId),(int)boxWidth()-24);
-                    if (mouseX < BOX_X + 8.f + ChatTextWidth(label))
-                    {
-                        if(activate) network.clickFile(lines[i].fileSender,lines[i].fileId);
+                if(lines[i].kind==CLKScreen || lines[i].kind==CLKFile || lines[i].kind==CLKImage){
+                    const auto link=network.chatLink(lines[i]);
+                    const string label=fitLink(link,(int)boxWidth()-24);
+                    const float right=BOX_X+8.f+ChatTextWidth(label);
+                    if(!link.action.empty() && !label.empty() && mouseX>=right-ChatTextWidth("["+link.action+"]") && mouseX<right){
+                        if(activate){
+                            if(lines[i].kind==CLKScreen)network.clickScreen(lines[i].fileSender,lines[i].fileId);
+                            else network.clickFile(lines[i].fileSender,lines[i].fileId);
+                        }
                         return true;
                     }
                     continue;
@@ -577,6 +590,7 @@ class cChatBox
     }
 
 public:
+    void nameRows(int rows) { _nameRows=rows; }
     bool linkHovered(cNetworkRuntime& network) { return openLinkUnderMouse(network,false); }
     const string& draft() const {return _draft;}
     void restoreDraft(const string& text){_draft=SanitiseChatText(text);_cursor=_draft.size();}
@@ -825,16 +839,11 @@ public:
                 g = .70f;
                 b = 1.0f;
             }
-            if (lines[i].kind == CLKScreen)
+            if (lines[i].kind == CLKScreen || lines[i].kind == CLKFile || lines[i].kind == CLKImage)
             {
-                const string label=FitChatText(network.screenLabel(lines[i].fileSender,lines[i].fileId),(int)width-24);
-                QueueChatText(label.c_str(),x+8.f,textY-(float)(i-first)*lineHeight,.25f,1.f,.42f);
-                continue;
-            }
-            if (lines[i].kind == CLKFile || lines[i].kind == CLKImage)
-            {
-                const string label = FitChatText(network.fileLabel(lines[i].fileSender,lines[i].fileId),(int)width-24);
-                QueueChatText(label.c_str(),x+8.f,textY-(float)(i-first)*lineHeight,1.f,lines[i].kind==CLKImage ? .92f : .30f,lines[i].kind==CLKImage ? .22f : .26f);
+                const auto link=network.chatLink(lines[i]);
+                const string label=fitLink(link,(int)boxWidth()-24);
+                DrawOfferLink(link,label,x+8.f,textY-(float)(i-first)*lineHeight);
                 continue;
             }
             DrawChatLineWithLinks(lines[i], x + 8.f, textY - (float)(i - first) * lineHeight, r, g, b);
@@ -854,14 +863,14 @@ public:
         }
         string inputLine = "> " + draft;
         if (_active && windowFocused)
-            QueueChatRect(x + 6.f, y + 6.f, x + width - 6.f, y + inputHeight + 4.f, .18f, .65f, .57f, 1.f, true);
+            QueueChatRect(x + 6.f, y + 6.f, x + width - 6.f, y + inputHeight + 4.f, .35f, .85f, 1.f, 1.f, true);
         QueueChatText(inputLine.c_str(), x + 10.f, y + 12.f, .90f, .94f, .92f);
         if (_draft.empty())
             QueueChatText(FitChatText("Message or /command", (int)width - 48).c_str(), x + 28.f, y + 12.f, .42f, .50f, .47f);
         if (_active && windowFocused && (GetTickCount64() / 500) % 2 == 0)
         {
             float caretX = x + 10.f + ChatTextWidth("> " + draft.substr(0, cursorInView));
-            QueueChatRect(caretX, y + 12.f, caretX + 1.f, y + 26.f, .70f, 1.f, .9f, 1.f, false);
+            QueueChatRect(caretX, y + 12.f, caretX + 1.f, y + 26.f, .65f, .92f, 1.f, 1.f, false);
         }
         if (showHistory) drawTimestamp(network,windowFocused);
 

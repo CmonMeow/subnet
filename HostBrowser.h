@@ -34,23 +34,23 @@ public:
             entriesRevision=directory.entriesRevision;haveEntries=true;
         }
         const int top=App.size.y-34;
-        QueueChatRect(12,44,(float)App.size.x-12,(float)top,.015f,.035f,.03f,.50f,false);
-        QueueChatRect(12,44,(float)App.size.x-12,(float)top,.3f,.45f,.4f,1,true);
+        QueueChatRect(12,44,(float)App.size.x-12,(float)top,.02f,.025f,.025f,.50f,false);
+        QueueChatRect(12,44,(float)App.size.x-12,(float)top,.32f,.38f,.36f,.95f,true);
         std::string title="Hosts  "+std::to_string(displayedPage+1)+"/"+std::to_string(displayedPages);
-        QueueChatText(title.c_str(),24,(float)top-19,.5f,.9f,.75f);
+        QueueChatText(title.c_str(),24,(float)top-19,.96f,.96f,.96f);
         std::string status=FitChatText(directory.status,App.size.x-48);
-        QueueChatText(status.c_str(),24,(float)top-39,.65f,.72f,.69f);
+        QueueChatText(status.c_str(),24,(float)top-39,.58f,.62f,.62f);
         for(size_t i=0;i<displayedEntries.size();++i){
             const auto& e=displayedEntries[i];int y=top-64-(int)i*18;
             std::string label=FitChatText(e.name,App.size.x-48);
             if(hit(20,y,App.size.x-40,18)){
-                QueueChatRect(20,(float)y,(float)App.size.x-20,(float)y+18,.02f,.15f,.11f,1,false);
+                QueueChatRect(20,(float)y,(float)App.size.x-20,(float)y+18,.02f,.10f,.14f,1,false);
                 ChatCursorResource=IDC_POINTER_YELLOW;
             }
-            QueueChatText(label.c_str(),24,(float)y+2,.4f,.9f,.68f);
+            QueueChatText(label.c_str(),24,(float)y+2,.35f,.85f,1.f);
         }
-        DrawChatButton("REFRESH",vec2i(20,48),false);
-        if(displayedPage>0)DrawChatButton("PREVIOUS",vec2i(156,48),false);
-        if(displayedPage+1<displayedPages)DrawChatButton("NEXT",vec2i(displayedPage>0?292:156,48),false);
+        DrawChatButton("REFRESH",vec2i(20,48),false,false,vec3f(.35f,.85f,1.f));
+        if(displayedPage>0)DrawChatButton("PREVIOUS",vec2i(156,48),false,false,vec3f(.35f,.85f,1.f));
+        if(displayedPage+1<displayedPages)DrawChatButton("NEXT",vec2i(displayedPage>0?292:156,48),false,false,vec3f(.35f,.85f,1.f));
     }
 };
