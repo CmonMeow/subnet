@@ -192,7 +192,7 @@ static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volume
     const string history = historyOffset ? " | history +" + std::to_string(historyOffset) : "";
     const string status = FitChatText(view.status, App.size.x - 436 - ChatTextWidth(history));
     QueueChatText(status.c_str(), 20.f, (float)App.size.y - 23.f,
-        view.online ? .50f : .65f, view.online ? .88f : .70f, view.online ? .74f : .67f);
+        view.online ? .45f : .65f, view.online ? .85f : .70f, view.online ? 1.f : .67f);
     if (!history.empty())
         QueueChatText(history.c_str(), 20.f + ChatTextWidth(status), (float)App.size.y - 23.f, .90f, .77f, .46f);
     if (!showPeople) return;
@@ -254,7 +254,10 @@ void RunChatClient(HWND hWnd)
         resume.reset();
         if(!restored){App.quit=true;ReleaseDC(hWnd,dc);return;}
     }
-    else if (settings.dedicated()) network.hostOnPort();
+    else {
+        const bool started=!settings.dedicated() || network.hostOnPort();
+        UpdateClient::completeResume(started);
+    }
     HostDirectoryClient directory(HostDirectoryClient::configuredAddress(DEFAULT_NETWORK_ADDRESS), APP_PROTOCOL_VERSION);
     UpdateClient updater(HostDirectoryClient::configuredAddress(DEFAULT_NETWORK_ADDRESS));
     HostBrowser browser;
@@ -323,7 +326,9 @@ void RunChatClient(HWND hWnd)
         network.localScreenBusy(screenShare.busy());
         if(!modal && !network.updatePending()){
             if(network.isHost() && updater.claimUpdate()){
-                if(!network.beginHostUpdate(updater.readyRelease(),updater.readyProtocol())){
+                if(const char* reason=updater.installBlockReason()){
+                    updater.skipRelease();network.showNotice(reason,true);
+                }else if(!network.beginHostUpdate(updater.readyRelease(),updater.readyProtocol())){
                     updater.skipRelease();network.showNotice("This update cannot restart the room automatically.",true);
                 }
             }else if(!network.hasConnection() && updater.claimUpdate()){

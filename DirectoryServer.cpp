@@ -1,5 +1,6 @@
 #include "HostDirectoryProtocol.h"
 #include "UpdateServer.h"
+#include "DirectoryTray.h"
 #include <windows.h>
 #include <sddl.h>
 #include <map>
@@ -24,15 +25,21 @@ static bool identity(const std::wstring& path,unsigned char* key,bool create) {
 struct Listing { Entry entry; sockaddr_in owner; Packet registration; ULONGLONG expires; };
 struct Pending { Packet packet; sockaddr_in owner,game; ULONGLONG expires,lastProbe; };
 struct Budget { ULONGLONG start=0;unsigned packets=0; };
-int wmain(int argc,wchar_t** argv) {
+static std::atomic<bool> stopping{false};
+static BOOL WINAPI consoleControl(DWORD event) {
+    if(event==CTRL_C_EVENT || event==CTRL_BREAK_EVENT || event==CTRL_CLOSE_EVENT){stopping=true;return TRUE;}
+    return FALSE;
+}
+static int runDirectory(int argc,wchar_t** argv,bool console) {
     bool init=false;unsigned port=Port;std::wstring keyPath;std::string bindAddress="0.0.0.0";
     for(int i=1;i<argc;++i){
         std::wstring arg=argv[i];
         if(arg==L"--init")init=true;
+        else if(arg==L"--console"){}
         else if(arg==L"--key"&&i+1<argc)keyPath=argv[++i];
         else if(arg==L"--port"&&i+1<argc){wchar_t* end=nullptr;unsigned long n=wcstoul(argv[++i],&end,10);if(!end||*end||n<1||n>65535)return 2;port=(unsigned)n;}
         else if(arg==L"--bind"&&i+1<argc){std::wstring value=argv[++i];bindAddress.clear();for(wchar_t c:value){if(c>127)return 2;bindAddress.push_back(static_cast<char>(c));}}
-        else {fwprintf(stderr,L"Usage: subnet-directory [--init] [--key path] [--bind IPv4] [--port 778]\n");return 2;}
+        else {fwprintf(stderr,L"Usage: subnet-directory [--console] [--init] [--key path] [--bind IPv4] [--port 778]\n");return 2;}
     }
     if(keyPath.empty()) {
         wchar_t executable[32768];DWORD length=GetModuleFileNameW(nullptr,executable,32768);
@@ -44,19 +51,27 @@ int wmain(int argc,wchar_t** argv) {
     }
     if(sodium_init()<0)return 2;
     unsigned char key[crypto_sign_SECRETKEYBYTES]={};
+    struct ClearKey {unsigned char* key;~ClearKey(){sodium_memzero(key,crypto_sign_SECRETKEYBYTES);}} clearKey{key};
     if(!identity(keyPath,key,init)){fwprintf(stderr,L"Cannot load directory identity: %ls. Use --init once to create it.\n",keyPath.c_str());return 2;}
-    if(init){unsigned char pk[crypto_sign_PUBLICKEYBYTES];crypto_sign_ed25519_sk_to_pk(pk,key);char hex[65];sodium_bin2hex(hex,sizeof(hex),pk,sizeof(pk));printf("Public key: %s\n",hex);fwprintf(stdout,L"Private identity: %ls\n",keyPath.c_str());sodium_memzero(key,sizeof(key));return 0;}
+    if(init){unsigned char pk[crypto_sign_PUBLICKEYBYTES];crypto_sign_ed25519_sk_to_pk(pk,key);char hex[65];sodium_bin2hex(hex,sizeof(hex),pk,sizeof(pk));printf("Public key: %s\n",hex);fwprintf(stdout,L"Private identity: %ls\n",keyPath.c_str());if(!console)MessageBoxA(nullptr,hex,"Directory public key",MB_OK|MB_ICONINFORMATION);return 0;}
     unsigned char loadedPublicKey[crypto_sign_PUBLICKEYBYTES];crypto_sign_ed25519_sk_to_pk(loadedPublicKey,key);
     if(sodium_memcmp(loadedPublicKey,publicKey(),sizeof(loadedPublicKey))!=0){fprintf(stderr,"Directory key does not match this release. Restore the original identity key or rebuild with the new public key.\n");sodium_memzero(key,sizeof(key));return 2;}
     WSADATA wsa;if(WSAStartup(MAKEWORD(2,2),&wsa))return 2;
+    struct Winsock {~Winsock(){WSACleanup();}} winsock;
     SOCKET socket=::socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);if(socket==INVALID_SOCKET)return 2;
+    struct Socket {SOCKET socket;~Socket(){closesocket(socket);}} closeSocket{socket};
+    BOOL exclusive=TRUE;
+    if(setsockopt(socket,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,reinterpret_cast<const char*>(&exclusive),sizeof(exclusive)))return 2;
     sockaddr_in local={};local.sin_family=AF_INET;local.sin_port=htons((u_short)port);
-    if(inet_pton(AF_INET,bindAddress.c_str(),&local.sin_addr)!=1 || bind(socket,reinterpret_cast<sockaddr*>(&local),sizeof(local))==SOCKET_ERROR){fprintf(stderr,"Cannot bind directory socket: %d\n",WSAGetLastError());closesocket(socket);WSACleanup();return 2;}
+    if(inet_pton(AF_INET,bindAddress.c_str(),&local.sin_addr)!=1 || bind(socket,reinterpret_cast<sockaddr*>(&local),sizeof(local))==SOCKET_ERROR){fprintf(stderr,"Cannot bind directory socket: %d\n",WSAGetLastError());return 2;}
     u_long nonblocking=1;
-    if(ioctlsocket(socket,FIONBIO,&nonblocking)==SOCKET_ERROR){fprintf(stderr,"Cannot make directory socket nonblocking: %d\n",WSAGetLastError());closesocket(socket);WSACleanup();return 2;}
+    if(ioctlsocket(socket,FIONBIO,&nonblocking)==SOCKET_ERROR){fprintf(stderr,"Cannot make directory socket nonblocking: %d\n",WSAGetLastError());return 2;}
     UpdateServer updates;
-    if(updates.start(local,Updates::folder(Updates::executable())))puts("Signed updates available on the directory TCP port.");
+    const bool servingUpdates=updates.start(local,Updates::folder(Updates::executable()));
+    if(servingUpdates)puts("Signed updates available on the directory TCP port.");
     else puts("Updates disabled: no matching signed subnet.exe/subnet.update, or TCP bind failed.");
+    DirectoryTray tray;
+    if(!console && !tray.start(port,servingUpdates))return 2;
     unsigned char cookieKey[32];randombytes_buf(cookieKey,sizeof(cookieKey));
     auto cookie=[&](const sockaddr_in& from,const Packet& p,ULONGLONG bucket,unsigned char* out){
         unsigned char input[30]={};memcpy(input,&from.sin_addr.s_addr,4);memcpy(input+4,&from.sin_port,2);memcpy(input+6,p.nonce,16);memcpy(input+22,&bucket,8);
@@ -64,13 +79,15 @@ int wmain(int argc,wchar_t** argv) {
     };
     auto authorized=[&](const sockaddr_in& from,const Packet& p,ULONGLONG now){unsigned char expected[16];for(unsigned age=0;age<2;++age){cookie(from,p,now/30000-age,expected);if(sodium_memcmp(expected,p.cookie,16)==0)return true;}return false;};
     std::map<uint64_t,Listing> hosts;std::map<uint64_t,Pending> pending;
+    std::vector<Entry> entries;
     // Fixed, keyed buckets cannot be exhausted by allocating spoofed source addresses.
     // Colliding addresses share a limit; the key changes on each process start.
     std::array<Budget,4096> budgets={};unsigned char rateKey[crypto_shorthash_KEYBYTES];randombytes_buf(rateKey,sizeof(rateKey));
     Budget global;ULONGLONG nextCleanup=0;
     printf("Directory listening on %s UDP %u. Listings expire after 90 seconds. Ctrl+C stops it.\n",bindAddress.c_str(),port);fflush(stdout);
-    for(;;){
-        fd_set reads;FD_ZERO(&reads);FD_SET(socket,&reads);updates.watch(reads);timeval wait={0,updates.pollMicros()};select(0,&reads,nullptr,nullptr,&wait);
+    while(!stopping && !tray.exiting()){
+        fd_set reads;FD_ZERO(&reads);FD_SET(socket,&reads);updates.watch(reads);timeval wait={0,updates.pollMicros()};
+        if(select(0,&reads,nullptr,nullptr,&wait)==SOCKET_ERROR){fprintf(stderr,"Directory wait failed: %d\n",WSAGetLastError());return 2;}
         updates.tick();
         auto now=GetTickCount64();
         if(now>=nextCleanup){
@@ -96,7 +113,7 @@ int wmain(int argc,wchar_t** argv) {
             if(p.kind==Browse || (p.kind==Register && !authorized(from,p,now))){
                 Packet response;response.kind=Challenge;memcpy(response.nonce,p.nonce,16);cookie(from,p,now/30000,response.cookie);reply(response,from);
             }else if(p.kind==Fetch && authorized(from,p,now)){
-                std::vector<Entry> entries;for(const auto& h:hosts)if(h.second.expires>now && h.second.entry.version==p.version)entries.push_back(h.second.entry);
+                entries.clear();for(const auto& h:hosts)if(h.second.expires>now && h.second.entry.version==p.version)entries.push_back(h.second.entry);
                 Packet response;response.kind=List;memcpy(response.nonce,p.nonce,16);response.pages=(uint16_t)((std::max)(size_t(1),(entries.size()+PageSize-1)/PageSize));response.page=(std::min)(p.page,uint16_t(response.pages-1));
                 size_t first=response.page*PageSize;response.count=(uint8_t)(first<entries.size()?(std::min)(size_t(PageSize),entries.size()-first):0);
                 for(unsigned i=0;i<response.count;++i)response.entries[i]=entries[first+i];reply(response,from);
@@ -144,4 +161,23 @@ int wmain(int argc,wchar_t** argv) {
         }
         if(work==128)Sleep(1);
     }
+    sodium_memzero(cookieKey,sizeof(cookieKey));sodium_memzero(rateKey,sizeof(rateKey));
+    return 0;
+}
+
+int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
+    int argc=0;wchar_t** argv=CommandLineToArgvW(GetCommandLineW(),&argc);if(!argv)return 2;
+    bool console=false;for(int i=1;i<argc;++i)if(wcscmp(argv[i],L"--console")==0)console=true;
+    if(console){
+        const bool output=GetFileType(GetStdHandle(STD_OUTPUT_HANDLE))!=FILE_TYPE_UNKNOWN;
+        const bool error=GetFileType(GetStdHandle(STD_ERROR_HANDLE))!=FILE_TYPE_UNKNOWN;
+        if(!AttachConsole(ATTACH_PARENT_PROCESS))AllocConsole();
+        FILE* stream=nullptr;
+        if(!output)freopen_s(&stream,"CONOUT$","w",stdout);
+        if(!error)freopen_s(&stream,"CONOUT$","w",stderr);
+        SetConsoleCtrlHandler(consoleControl,TRUE);
+    }
+    const int result=runDirectory(argc,argv,console);LocalFree(argv);
+    if(result && !console)MessageBoxW(nullptr,L"The directory could not start or continue running. Check its identity key and port availability. Use --console for diagnostic details.",L"subnet directory",MB_OK|MB_ICONERROR);
+    return result;
 }

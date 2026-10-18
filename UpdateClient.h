@@ -25,7 +25,8 @@ public:
     uint64_t readyRelease() const { return done.load() ? release : 0; }
     uint32_t readyProtocol() const { return done.load() ? protocol : 0; }
     bool claimUpdate();
-    void skipRelease(){skippedRelease=readyRelease();claimed=true;}
+    const char* installBlockReason() const;
+    void skipRelease();
     bool install(const SessionResume* resume=nullptr);
     static std::unique_ptr<SessionResume> takeResume();
     static void completeResume(bool success);
