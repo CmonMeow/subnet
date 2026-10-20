@@ -11,6 +11,12 @@ constexpr uint32_t Magic = 0x3144494f; // OID1, directory protocol 1.
 constexpr unsigned short Port = 778;
 constexpr unsigned PageSize = 5, MaxHosts = 2500;
 constexpr unsigned MaxHostsPerAddress = 8;
+// Keep the directory packet layout compatible. User counts occupy the low 15 bits.
+constexpr uint16_t PublicHost=0x8000;
+enum class HostFilter : uint16_t { All, Public, Private };
+inline bool matchesFilter(uint16_t users,HostFilter filter) {
+    return filter==HostFilter::All || ((users&PublicHost)!=0)==(filter==HostFilter::Public);
+}
 constexpr unsigned long long LeaseMs = 90000;
 enum Kind : uint8_t { Browse=1, Challenge, Fetch, List, Register, Probe, Proof, Listed, Retire };
 #pragma pack(push,1)

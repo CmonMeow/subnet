@@ -46,7 +46,7 @@ public:
         if (!_pixels) Error("Could not load chat background");
     }
 
-    void draw(int width, int height)
+    void draw(int width, int height, bool publicRoom=false)
     {
         if (!_pixels || width <= 0 || height <= 0) return;
         if (width != _width || height != _height) resize(width, height);
@@ -59,7 +59,8 @@ public:
         glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
         glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
         glPixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
-        glColor3f(1.f, .18f, 0.f);
+        if(publicRoom)glColor3f(.18f,1.f,0.f);
+        else glColor3f(1.f,.18f,0.f);
         // glBitmap cannot scale; reuse the one-bit image prepared on resize.
         glRasterPos2i(0, 0);
         glBitmap(width, height, 0, 0, 0, 0, _scaled.data());

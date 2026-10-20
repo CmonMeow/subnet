@@ -186,11 +186,11 @@ static ChatStatusView MakeChatStatus(const cNetworkRuntime& network, const cVoic
     return view;
 }
 
-static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volumes, size_t historyOffset = 0, bool showPeople = true, int nameRows = 1)
+static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volumes, size_t historyOffset = 0, bool showPeople = true, int nameRows = 1, bool hosting = false)
 {
     volumes.beginRows();
     const string history = historyOffset ? " | history +" + std::to_string(historyOffset) : "";
-    const string status = FitChatText(view.status, App.size.x - 436 - ChatTextWidth(history));
+    const string status = FitChatText(view.status, App.size.x - (hosting?572:436) - ChatTextWidth(history));
     QueueChatText(status.c_str(), 20.f, (float)App.size.y - 23.f,
         view.online ? .45f : .65f, view.online ? .85f : .70f, view.online ? 1.f : .67f);
     if (!history.empty())
@@ -199,7 +199,7 @@ static void DrawChatStatus(const ChatStatusView& view, ParticipantVolume& volume
     float x = 20.f, y = (float)App.size.y - 53.f;
     if (view.people.empty())
     {
-        QueueChatText(view.connecting || view.online ? "Waiting for server..." : "Type /connect or /host to begin", x, y, .43f, .51f, .48f);
+        QueueChatText(view.connecting || view.online ? "Waiting for server..." : "Use /connect or click HOST", x, y, .43f, .51f, .48f);
         return;
     }
     int row=0;
@@ -263,10 +263,6 @@ void RunChatClient(HWND hWnd)
     HostBrowser browser;
     cChatBox chatBox;chatBox.restoreDraft(resumeDraft);
     string previousPublishStatus;
-    network.browseHosts=[&]{
-        if(network.hasConnection())network.showNotice("Use /disconnect before browsing hosts.",true);
-        else {chatBox.deactivate();browser.show(directory);}
-    };
     cVoiceChat voiceChat;voiceChat.restoreMicLatch(resumeMic);
     MessageChimeCooldown chimeCooldown;
     std::function<void(bool)> appFocusChanged = [&](bool active) {
@@ -351,7 +347,7 @@ void RunChatClient(HWND hWnd)
             if(state && updater.install(state.get())){App.quit=true;ticking=false;return;}
         }
         network.update();
-        directory.update(network.isHost(),network.hostingPort(),(unsigned)network.participants().size(),settings.hostName);
+        directory.update(network.isHost(),network.hostingPort(),(unsigned)network.participants().size(),settings.hostName,network.publicHost());
         if(!modal) browser.update(network,directory);
         if(directory.publishStatus!=previousPublishStatus){
             previousPublishStatus=directory.publishStatus;
@@ -399,6 +395,8 @@ void RunChatClient(HWND hWnd)
         const vec2i micButton(App.size.x - 140, App.size.y - 28);
         const vec2i screenButton(App.size.x - 412, App.size.y - 28);
         const vec2i hotkeyButton(App.size.x - 276, App.size.y - 28);
+        const vec2i privacyButton(App.size.x - 548, App.size.y - 28);
+        if(!modal && network.isHost() && ChatButtonHovered(privacyButton) && input.leftClick()){input.KeyUp(VK_LBUTTON);network.togglePublicHost();}
         const bool micClicked = !modal && ChatButtonHovered(micButton) && input.leftClick();
         const bool hotkeyClicked = !modal && ChatButtonHovered(hotkeyButton) && input.leftClick();
         const bool screenClicked=!modal &&ChatButtonHovered(screenButton) && input.leftClick();
@@ -441,14 +439,15 @@ void RunChatClient(HWND hWnd)
             glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, App.size.x, 0, App.size.y, -1, 1);
             glMatrixMode(GL_MODELVIEW); glLoadIdentity();
             ChatCursorResource=!browser.shown(network) && chatBox.linkHovered(network) ? IDC_POINTER_YELLOW : IDC_POINTER_CYAN;
-            background.draw(App.size.x, App.size.y);
+            background.draw(App.size.x, App.size.y,network.publicRoom());
             chatBox.draw(network, GetForegroundWindow() == hWnd, !browser.shown(network));
-            DrawChatStatus(MakeChatStatus(network, voiceChat, participantOrder), userVolumes, chatBox.historyOffset(), !browser.shown(network),nameRows);
+            DrawChatStatus(MakeChatStatus(network, voiceChat, participantOrder), userVolumes, chatBox.historyOffset(), !browser.shown(network),nameRows,network.isHost());
             browser.draw(network,directory);
             DrawChatButton(voiceChat.micEnabled() ? "MIC ON" : "MIC OFF",
                                         micButton, voiceChat.micEnabled(), voiceChat.transmitting(network));
             DrawChatButton(selectingHotkey ? "PRESS KEY" : settings.talkKeyLabel().c_str(), hotkeyButton, selectingHotkey);
             DrawChatButton(!network.hasConnection() ? "HOST" : screenShare.watching() ? "STOP WATCH" : screenShare.sharing() ? "STOP SHARE" : "SCREEN",screenButton,screenShare.sharing() || screenShare.watching());
+            if(network.isHost())DrawChatButton(network.publicHost()?"PUBLIC":"PRIVATE",privacyButton,network.publicHost());
             userVolumes.draw(voiceChat);
             const HCURSOR cursor=ChatCursorResource==IDC_POINTER_GREEN ? greenCursor : ChatCursorResource==IDC_POINTER_YELLOW ? yellowCursor : cyanCursor;
             if(reinterpret_cast<HCURSOR>(GetClassLongPtrA(hWnd,GCLP_HCURSOR))!=cursor)

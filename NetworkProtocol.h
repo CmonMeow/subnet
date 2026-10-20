@@ -447,7 +447,7 @@ inline bool ValidAppMessageType(ChatPacketKind type)
     switch (type) {
     case NAMTConnect: case NAMTDisconnect: case NAMTChat: case NAMTHeartbeat:
     case NAMTSessionEnd: case NAMTPlayerAssign: case NAMTVoice: case NAMTKeyHello: case NAMTKeyAccept:
-    case NAMTResumeHello: case NAMTResumeAccept: case NAMTUpdate: case NAMTScreen: case NAMTFile: case NAMTSystemNotice: case NAMTCommandError: case NAMTPresence: case NAMTChatKey: case NAMTPrivateChat: case NAMTEncrypted: return true;
+    case NAMTHistory: case NAMTResumeHello: case NAMTResumeAccept: case NAMTUpdate: case NAMTScreen: case NAMTFile: case NAMTSystemNotice: case NAMTCommandError: case NAMTPresence: case NAMTChatKey: case NAMTPrivateChat: case NAMTEncrypted: return true;
     default: return false;
     }
 }

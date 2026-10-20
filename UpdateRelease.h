@@ -1,5 +1,5 @@
 #pragma once
-#define UPDATE_RELEASE 44L
+#define UPDATE_RELEASE 50L
 #ifndef RC_INVOKED
 inline constexpr unsigned long long UpdateRelease=UPDATE_RELEASE;
 #endif

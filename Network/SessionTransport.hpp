@@ -46,7 +46,7 @@ enum DeliveryOptions {
 enum ChatPacketKind : unsigned char {
     NAMTConnect = 1, NAMTDisconnect = 2, NAMTChat = 3, NAMTHeartbeat = 4,
     NAMTPlayerAssign = 5, NAMTVoice = 12, NAMTKeyHello = 13, NAMTKeyAccept = 14,
-    NAMTChatKey = 17, NAMTPrivateChat = 18, NAMTEncrypted = 26, NAMTSessionEnd = 27, NAMTPresence = 28, NAMTCommandError = 29, NAMTSystemNotice = 30, NAMTFile = 31, NAMTScreen = 32, NAMTUpdate = 33, NAMTResumeHello = 34, NAMTResumeAccept = 35
+    NAMTChatKey = 17, NAMTPrivateChat = 18, NAMTEncrypted = 26, NAMTSessionEnd = 27, NAMTPresence = 28, NAMTCommandError = 29, NAMTSystemNotice = 30, NAMTFile = 31, NAMTScreen = 32, NAMTUpdate = 33, NAMTResumeHello = 34, NAMTResumeAccept = 35, NAMTHistory = 36
 };
 
 #pragma pack(push, netAppMessage, 1)

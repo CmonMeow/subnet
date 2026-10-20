@@ -3,6 +3,7 @@
 #include "Network/AsyncResolver.h"
 #include <vector>
 #include <fstream>
+#include <algorithm>
 
 class HostDirectoryClient {
     SOCKET socket=INVALID_SOCKET;
@@ -10,6 +11,8 @@ class HostDirectoryClient {
     sockaddr_in directory={},listedDirectory={};
     AsyncResolver resolver;
     std::string hostname,publishedName;
+    bool publishedPublic=false;
+    HostDirectory::HostFilter filter=HostDirectory::HostFilter::All;
     uint32_t version;
     HostDirectory::Packet query,registration,lastListed;
     bool fetching=false,registering=false,haveListing=false;
@@ -55,17 +58,22 @@ public:
         if(requestedPage!=page){entries.clear();++entriesRevision;}
         page=requestedPage;fetching=false;nextQuery=0;status="Finding hosts...";
     }
-    void update(bool isHost,unsigned short port,unsigned users,const std::string& hostName) {
+    HostDirectory::HostFilter hostFilter() const {return filter;}
+    void cycleFilter() {
+        filter=HostDirectory::HostFilter((unsigned(filter)+1)%3);
+        entries.clear();++entriesRevision;pages=1;refresh();
+    }
+    void update(bool isHost,unsigned short port,unsigned users,const std::string& hostName,bool publicHost=false) {
         using namespace HostDirectory;auto now=GetTickCount64();
-        if(isHost&&publishedName!=hostName){cancelRegistration();publishedName=hostName;nextRegistration=0;}
+        if(isHost&&(publishedName!=hostName || publishedPublic!=publicHost)){cancelRegistration();publishedName=hostName;publishedPublic=publicHost;nextRegistration=0;}
         if(hosting&&!isHost)retire();if(hosting!=isHost){hosting=isHost;nextRegistration=0;publishStatus=hosting?"Publishing host...":"";}
         // Expiry must run even while DNS resolution is failing.
-        if(lastList&&now-lastList>=LeaseMs){entries.clear();++entriesRevision;lastList=0;page=0;pages=1;status="Directory unavailable. Use /connect or /host.";}
+        if(lastList&&now-lastList>=LeaseMs){entries.clear();++entriesRevision;lastList=0;page=0;pages=1;status="Directory unavailable. Use /connect or the HOST button.";}
         if(lastPublished&&now-lastPublished>=LeaseMs)publishStatus="Host listing expired. Check UDP forwarding.";
         if(socket==INVALID_SOCKET){if(hosting)publishStatus="Directory unavailable. Direct connections still work.";return;}
         if(!resolved){
             if(!resolving&&now>=nextResolve){resolver.start(hostname);resolving=true;nextResolve=now+30000;}
-            if(resolving){int result=resolver.poll(directory);if(result){resolving=false;resolved=result>0;if(!resolved){status="Directory unavailable. Use /connect or /host.";if(hosting)publishStatus="Directory unavailable. Direct connections still work.";}}}
+            if(resolving){int result=resolver.poll(directory);if(result){resolving=false;resolved=result>0;if(!resolved){status="Directory unavailable. Use /connect or the HOST button.";if(hosting)publishStatus="Directory unavailable. Direct connections still work.";}}}
             if(!resolved)return;
         }
         for(unsigned work=0;work<32;++work){
@@ -82,7 +90,9 @@ public:
                     bool valid=true;for(unsigned i=0;i<p.count;++i)if(!validName(p.entries[i].name)||!p.entries[i].port||!p.entries[i].address||p.entries[i].version!=version)valid=false;
                     if(!valid)continue;
                     entries.assign(p.entries,p.entries+p.count);++entriesRevision;page=p.page;pages=p.pages;fetching=false;lastList=now;nextQuery=now+15000;
-                    status=entries.empty()?"No hosts online. Type /host to start one.":"Click a host to join.";
+                    // Older directories paginate all hosts; still honor the selected type locally.
+                    entries.erase(std::remove_if(entries.begin(),entries.end(),[&](const Entry& e){return !matchesFilter(e.users,filter);}),entries.end());
+                    status=entries.empty()?"No matching hosts. Click HOST to start one.":"Click a host to join.";
                 }
             }
             if(hosting&&registering&&sodium_memcmp(p.nonce,registration.nonce,16)==0){
@@ -91,17 +101,17 @@ public:
             }
         }
         if(now>=nextQuery){
-            if(!fetching){query=Packet{};query.kind=Browse;query.version=version;query.page=(uint16_t)page;randombytes_buf(query.nonce,16);queryAttempts=0;fetching=true;}
+            if(!fetching){query=Packet{};query.kind=Browse;query.version=version;query.page=(uint16_t)page;query.users=uint16_t(filter);randombytes_buf(query.nonce,16);queryAttempts=0;fetching=true;}
             if(queryAttempts++>=4){
                 fetching=false;nextQuery=now+15000;
-                status=entries.empty()?"Directory unavailable. Use /connect or /host.":"Directory unavailable; showing last known hosts.";
+                status=entries.empty()?"Directory unavailable. Use /connect or the HOST button.":"Directory unavailable; showing last known hosts.";
                 if(now>=nextResolve){cancelRegistration();resolved=false;nextRegistration=0;return;}
             }
             else {send(socket,directory,query);nextQuery=now+2000;}
         }
         if(hosting&&now>=nextRegistration){
             if(!registering){
-                registration=Packet{};registration.kind=Register;registration.gamePort=port;registration.users=(uint16_t)(std::min)(users,65535u);registration.version=version;
+                registration=Packet{};registration.kind=Register;registration.gamePort=port;registration.users=(uint16_t)(std::min)(users,32767u)|(publicHost?PublicHost:0);registration.version=version;
                 const std::string name=hostName.empty()?"Host":hostName;strncpy_s(registration.name,name.c_str(),32);
                 randombytes_buf(registration.nonce,16);registrationAttempts=0;registering=true;HostDirectoryProbe::instance().set(directory,registration);
             }

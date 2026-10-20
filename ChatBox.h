@@ -343,7 +343,7 @@ class cChatBox
         url.clear();return false;
     }
 
-    static void DrawOfferLink(const ChatLink& link,const string& label,float x,float y)
+    static void DrawOfferLink(const ChatLink& link,const string& label,float x,float y,bool screen=false)
     {
         const string action=link.action.empty()?string():"["+link.action+"]";
         const size_t actionStart=!action.empty() && label.size()>=action.size()
@@ -352,7 +352,7 @@ class cChatBox
         QueueChatText(label.substr(0,actionStart).c_str(),x,y,
             inactive?.58f:.96f,inactive?.62f:.96f,inactive?.62f:.96f);
         if(actionStart<label.size())
-            QueueChatText(action.c_str(),x+ChatTextWidth(label.substr(0,actionStart)),y,.35f,.85f,1.f);
+            QueueChatText(action.c_str(),x+ChatTextWidth(label.substr(0,actionStart)),y,.35f,screen?1.f:.85f,screen?.55f:1.f);
     }
 
     static void DrawChatLineWithLinks(const NetworkChatLine& row, float x, float y, float r, float g, float b)
@@ -366,7 +366,7 @@ class cChatBox
             if(end<=first)continue;
             start=(std::max)(start,first);end=(std::min)(end,last);
             if(start>drawn)QueueChatText(text.substr(drawn,start-drawn).c_str(),x+ChatTextWidth(text.substr(first,drawn-first)),y,r,g,b);
-            QueueChatText(text.substr(start,end-start).c_str(),x+ChatTextWidth(text.substr(first,start-first)),y,.35f,.85f,1.f);
+            QueueChatText(text.substr(start,end-start).c_str(),x+ChatTextWidth(text.substr(first,start-first)),y,1.f,.90f,.25f);
             drawn=end;
         }
         if(drawn<last)QueueChatText(text.substr(drawn,last-drawn).c_str(),x+ChatTextWidth(text.substr(first,drawn-first)),y,r,g,b);
@@ -505,19 +505,6 @@ class cChatBox
             network.setDedicated(command.substr(10));
             break;
 
-        case ChatCommand::Hosts:
-            if (network.browseHosts) network.browseHosts();
-            break;
-
-        case ChatCommand::Host:
-            if (!Trim(command.substr(5)).empty())
-                network.showNotice("usage: /host", true);
-            else if (network.hasConnection())
-                network.showNotice("Use /disconnect before hosting.", true);
-            else
-                network.hostOnPort();
-            break;
-
         case ChatCommand::Connect:
         {
             string address = Trim(command.size() > 8 ? command.substr(8) : string());
@@ -532,7 +519,7 @@ class cChatBox
             network.clearChat();
             break;
 
-        case ChatCommand::Disconnect:
+        case ChatCommand::Leave:
             network.disconnect();
             break;
 
@@ -843,7 +830,7 @@ public:
             {
                 const auto link=network.chatLink(lines[i]);
                 const string label=fitLink(link,(int)boxWidth()-24);
-                DrawOfferLink(link,label,x+8.f,textY-(float)(i-first)*lineHeight);
+                DrawOfferLink(link,label,x+8.f,textY-(float)(i-first)*lineHeight,lines[i].kind==CLKScreen);
                 continue;
             }
             DrawChatLineWithLinks(lines[i], x + 8.f, textY - (float)(i - first) * lineHeight, r, g, b);

@@ -6,6 +6,7 @@
 #include "ImageViewer.h"
 #include "ScreenSignaling.h"
 #include "HostUpdate.h"
+#include <set>
 
 class cNetworkRuntime
 {
@@ -147,6 +148,27 @@ class cNetworkRuntime
     ClientSessionInterface* _client;
     vector<__int32> _players;
     vector<NetworkChatLine> _chatLines;
+    bool _publicHost=false;
+    bool _remotePublic=false;
+    unsigned _publicModeRevision=0,_remoteModeRevision=0;
+    std::set<int> _historyPeers;
+    void sendHostMode(int player) {
+        NetPacket raw;raw.putInt32(_publicHost?1:0);raw.putInt32(_publicModeRevision);
+        sendRawFromServer(player,NAMTHistory,raw,DeliveryGuaranteed|DeliveryHighPriority);
+    }
+    struct PublicMessage { string text;SYSTEMTIME time={};unsigned long long sequence=0; };
+    vector<PublicMessage> _publicHistory;
+    unsigned long long _nextPublicMessage=0;
+    std::map<int,unsigned long long> _pendingHistory;
+    unsigned _receivedHistory=0;
+    std::set<int> _resumingPlayers;
+    static constexpr unsigned PublicHistoryLimit=100;
+    static constexpr unsigned PublicResumeTag=0x50554231;
+    void rememberPublicChat(const string& line) {
+        if(!_publicHost)return;
+        if(_publicHistory.size()==PublicHistoryLimit)_publicHistory.erase(_publicHistory.begin());
+        PublicMessage message;message.text=line;message.sequence=++_nextPublicMessage;GetLocalTime(&message.time);_publicHistory.push_back(std::move(message));
+    }
     size_t _chatWrapChars = CHAT_WRAP_CHARS;
     void appendWrappedChat(NetworkChatLine line, size_t end) {
         const auto& text=*line.message;
@@ -644,6 +666,7 @@ class cNetworkRuntime
                 }
                 sendUpdate(-1,HostUpdate::Capability);
                 sendUpdate(-1,HostUpdate::StatefulCapability);
+                sendRawFromClient(NAMTHistory,NetPacket(),DeliveryGuaranteed|DeliveryHighPriority);
             }
             if (_settings && _localPlayerId >= 0 && !_settings->setServerAddress(_connectingAddress))
                 showNotice("Connected; could not save server setting.", true);
@@ -652,6 +675,27 @@ class cNetworkRuntime
         }
 
         if (messageSize < sizeof(ChatPacketPrefix)) return;
+        if(reinterpret_cast<const ChatPacketPrefix*>(message)->type==NAMTHistory){
+            NetPacket raw(message+sizeof(ChatPacketPrefix),messageSize-sizeof(ChatPacketPrefix));
+            if(decrypted.empty() || !clientReady())return;
+            // A short response carries room mode; older history-aware clients ignore it.
+            if(messageSize==sizeof(ChatPacketPrefix)+2*sizeof(__int32)){
+                __int32 mode,revision;
+                if(raw.getInt32(mode) && raw.getInt32(revision) && (mode==0 || mode==1) &&
+                    static_cast<__int32>(unsigned(revision)-_remoteModeRevision)>=0){
+                    _remotePublic=mode!=0;_remoteModeRevision=unsigned(revision);
+                }
+                return;
+            }
+            string line;SYSTEMTIME time={};FILETIME validTime;
+            if(_receivedHistory<PublicHistoryLimit &&
+                raw.get(&time,sizeof(time)) && SystemTimeToFileTime(&time,&validTime) &&
+                raw.getLongString(line,CHAT_MAX_LINE_CHARS) && raw.fullyRead()){
+                ++_receivedHistory;const auto previous=_nextChatLineId;addChatLine(line);
+                for(auto& row:_chatLines)if(row.historyId>previous)row.receivedAt=time;
+            }
+            return;
+        }
         if(reinterpret_cast<const ChatPacketPrefix*>(message)->type==NAMTUpdate){
             if(_clientCrypto.ready() && !decrypted.empty())receiveUpdate(0,message,messageSize);return;
         }
@@ -814,6 +858,19 @@ class cNetworkRuntime
         }
         else if (!fileBudget(budget.control, messageSize, 65536, 10)) return;
 
+        if(messageHeader->type==NAMTHistory){
+            if(messageSize!=sizeof(ChatPacketPrefix) || !_historyPeers.insert(from).second)return;
+            sendHostMode(from);
+            auto pending=_pendingHistory.find(from);
+            if(pending==_pendingHistory.end())return;
+            const auto through=pending->second;_pendingHistory.erase(pending);
+            if(_publicHost)for(const auto& line:_publicHistory)if(line.sequence<=through){
+                NetPacket raw;raw.put(&line.time,sizeof(line.time));raw.putLongString(line.text,CHAT_MAX_LINE_CHARS);
+                sendRawFromServer(from,NAMTHistory,raw,DeliveryGuaranteed|DeliveryHighPriority);
+            }
+            return;
+        }
+
         NetworkVoicePacket voicePacket;
         if (ParseVoicePacket(message, messageSize, voicePacket))
         {
@@ -873,6 +930,7 @@ class cNetworkRuntime
                 NetPacket raw;raw.put(response.data(), (__int32)response.size());
                 _server->SetPacketKeys(from, _serverCrypto[from].receiveKey(), _serverCrypto[from].sendKey());
                 sendPlainRawFromServer(from,resuming?NAMTResumeAccept:NAMTKeyAccept,raw);
+                if(resuming)_resumingPlayers.insert(from);
             }
             else
             {
@@ -950,6 +1008,9 @@ class cNetworkRuntime
         _files.peerLeft(player);
         clearFileRelay(player);
         _peerBudgets.erase(player);
+        _resumingPlayers.erase(player);
+        _pendingHistory.erase(player);
+        _historyPeers.erase(player);
         _privateChatKeys.erase(player);
         _privateChatNames.erase(player);
         _serverCrypto.erase(player);
@@ -971,6 +1032,9 @@ class cNetworkRuntime
         broadcastPresence();
 
         std::ostringstream status;
+        const bool resuming=_resumingPlayers.erase(player)!=0;
+        // Older clients never request history. Freeze the cutoff before live chat can arrive.
+        if(_publicHost && !resuming)_pendingHistory[player]=_nextPublicMessage;
         status << "system: " << playerDisplayName(player) << " joined";
         addChatLine(status.str(), CLKSystem);
         if(activityReceived) activityReceived();
@@ -1233,6 +1297,7 @@ class cNetworkRuntime
         std::ostringstream line;
         line << playerDisplayName(from) << ": " << text;
         addChatLine(line.str());
+        rememberPublicChat(line.str());
         if(from != localPlayerId() && messageReceived) messageReceived();
         sendRawStringFromServerToAll(NAMTChat, line.str(), CHAT_MAX_LINE_CHARS);
     }
@@ -1493,27 +1558,47 @@ public:
             strncpy_s(resume->address,_hostUpdate.address.c_str(),_TRUNCATE);
             strncpy_s(resume->savedAddress,_hostUpdate.savedAddress.c_str(),_TRUNCATE);
         }
-        for(const auto& line:_chatLines){
-            if(resume->lines>=500)break;
+        // Keep the existing updater mapping size: shared messages occupy its trailing history slots.
+        const unsigned shared=isHost()&&_publicHost?(unsigned)_publicHistory.size():0;
+        resume->reserved[0]=isHost()&&_publicHost;resume->reserved[1]=shared;resume->reserved[2]=PublicResumeTag;
+        const size_t first=_chatLines.size()>500-shared?_chatLines.size()-(500-shared):0;
+        for(size_t i=first;i<_chatLines.size();++i){
+            const auto& line=_chatLines[i];
             auto& out=resume->history[resume->lines++];out.time=line.receivedAt;
             out.kind=line.kind<=CLKError?line.kind:CLKSystem;
             strncpy_s(out.text,line.text.c_str(),_TRUNCATE);
+        }
+        for(unsigned i=0;i<shared;++i){
+            auto& out=resume->history[resume->lines++];out.kind=CLKNormal;out.time=_publicHistory[i].time;
+            strncpy_s(out.text,_publicHistory[i].text.c_str(),_TRUNCATE);
         }
         return resume;
     }
     bool restoreSession(const SessionResume& resume) {
         if(!resume.valid())return false;
+        const bool hasPublicState=resume.reserved[2]==PublicResumeTag;
+        const unsigned shared=hasPublicState?resume.reserved[1]:0;
+        if(shared>PublicHistoryLimit || shared>resume.lines || (hasPublicState && resume.reserved[0]>1) ||
+            (hasPublicState && resume.reserved[0] && resume.mode!=1) || (shared && !resume.reserved[0]))return false;
         for(unsigned i=0;i<resume.lines;++i){
             const auto& saved=resume.history[i];if(saved.text[1152] || saved.kind>CLKError)return false;
+            // Never reinterpret a private/local row as shared history if resume metadata is damaged.
+            if(i>=resume.lines-shared){
+                FILETIME time;
+                if(saved.kind!=CLKNormal || !saved.text[0] || !SystemTimeToFileTime(&saved.time,&time))return false;
+            }
         }
-        for(unsigned i=0;i<resume.lines;++i){
+        for(unsigned i=0;i<resume.lines-shared;++i){
             const auto& saved=resume.history[i];NetworkChatLine line;
             line.text=SanitiseChatLine(saved.text);line.kind=(ChatLineKind)saved.kind;
             line.receivedAt=saved.time;line.historyId=++_nextChatLineId;_chatLines.push_back(std::move(line));
         }
         if(resume.mode==1){
             memcpy(_resumeSeed,resume.key,32);_resumeSeedUntil=resume.expires;
-            return hostOnPort((unsigned short)resume.port);
+            if(!hostOnPort((unsigned short)resume.port))return false;
+            _publicHost=hasPublicState && resume.reserved[0];
+            for(unsigned i=resume.lines-shared;i<resume.lines;++i)_publicHistory.push_back({SanitiseChatLine(resume.history[i].text),resume.history[i].time,++_nextPublicMessage});
+            return true;
         }
         string host;unsigned short port=0;
         if(!parseServerAddress(resume.address,host,port)||port!=resume.port)return false;
@@ -1733,6 +1818,17 @@ public:
 
     string statusNotice() const {return GetTickCount64() < _statusNoticeUntil ? _statusNotice : string();}
     std::function<void()> messageReceived;
+    bool publicHost() const {return isHost() && _publicHost;}
+    bool publicRoom() const {return publicHost() || (clientReady() && _remotePublic);}
+    void togglePublicHost() {
+        if(!isHost() || updatePending())return;
+        _publicHost=!_publicHost;_publicHistory.clear();_pendingHistory.clear();
+        ++_publicModeRevision;
+        for(int player:_historyPeers)sendHostMode(player);
+        const string notice=_publicHost?"Host is public: new arrivals receive recent chat.":"Host is private: new arrivals receive no chat history.";
+        addChatLine(notice,CLKSystem);
+        sendRawStringFromServerToAll(NAMTSystemNotice,notice,CHAT_MAX_LINE_CHARS);
+    }
     std::function<void()> activityReceived;
     void showNotice(const string& text, bool error = false) { addChatLine(text, error ? CLKError : CLKSystem); }
 
@@ -1790,7 +1886,7 @@ public:
         const bool enable = mode.empty() ? !_settings->dedicated() : mode == "on";
         if (enable && !isHost())
         {
-            if (hasConnection()) { showNotice("Use /disconnect before enabling dedicated mode.", true); return; }
+            if (hasConnection()) { showNotice("Use /leave before enabling dedicated mode.", true); return; }
             if (!hostOnPort()) return;
         }
         if (!_settings->setDedicated(enable)) { showNotice("Could not save startup setting.", true); return; }
@@ -1843,7 +1939,7 @@ public:
         _files.offerImage(std::move(image),peers);
     }
     unsigned short hostingPort() const { return _hostingPort; }
-    std::function<void()> browseHosts;
+
     std::function<void(int,const string&)> openScreen;
     void sendScreenEvent(const ScreenSignaling::Event& event) { if(isHost() || clientReady()) _screens.send(event); }
     bool popScreenEvent(ScreenSignaling::Event& event) { return _screens.pop(event); }
@@ -1895,9 +1991,10 @@ public:
             }
             string line = _hostName + ": " + message;
             addChatLine(line, CLKNormal);
+            rememberPublicChat(line);
             sendRawStringFromServerToAll(NAMTChat, line, CHAT_MAX_LINE_CHARS);
         }
-        else addChatLine("Not connected. Use /connect or /host.", CLKError);
+        else addChatLine("Not connected. Use /connect or the HOST button.", CLKError);
     }
 
     bool kickPlayer(const string& reference, bool ban)
@@ -1993,6 +2090,9 @@ public:
 private:
     void finishDisconnect()
     {
+        _publicHost=false;_publicHistory.clear();_nextPublicMessage=0;_pendingHistory.clear();_receivedHistory=0;_resumingPlayers.clear();
+        _remotePublic=false;_historyPeers.clear();
+        _publicModeRevision=_remoteModeRevision=0;
         const bool hosting=_server!=nullptr;
         // Receive callbacks use the transport objects. Join their workers
         // before clearing pointers or freeing either object.

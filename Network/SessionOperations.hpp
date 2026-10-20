@@ -37,7 +37,7 @@ void registerClientSession(ClientSession* _cl)
 	poolCriticalSection().unlock();
 }
 
-void registerHostSession(HostSession* _srv)
+void registerHostSession(HostSession* _srv, unsigned short port = 777)
 {
 	poolCriticalSection().lock();
 	_server = _srv;
@@ -45,7 +45,7 @@ void registerHostSession(HostSession* _srv)
 	{
 		endpointRegistry();
 		clientEndpoint();
-		hostEndpoint();
+		hostEndpoint(true,port);
 	}
 	poolCriticalSection().unlock();
 }
@@ -671,7 +671,7 @@ HostSession::HostSession(unsigned short port)
 	session.port = 0;
 	session.name[0] = (char)0;
 
-	registerHostSession(this);
+	registerHostSession(this,port);
 	poolCriticalSection().lock();
 	roomListenPort = hostEndpoint(true,port) ? hostEndpoint()->endpointPort() : 0;
 	poolCriticalSection().unlock();

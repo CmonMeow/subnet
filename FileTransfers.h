@@ -17,6 +17,7 @@ class FileTransfers
 public:
     enum : unsigned char { Offer = 1, Accept, Chunk, Ack, Finish, Done, Cancel, ImageOffer, CompressedImageOffer };
     static constexpr unsigned ChunkBytes = 8192;
+    static constexpr ULONGLONG OfferLifetimeMs = 30ULL * 60 * 1000;
     // Shared by all uploads, so four recipients cannot multiply the backlog.
     static constexpr unsigned FlightBytes = 1024 * 1024;
     static constexpr unsigned __int64 MaxFileBytes = 4ULL * 1024 * 1024 * 1024;
@@ -173,7 +174,7 @@ public:
         source->name = utf8(path.substr(path.find_last_of(L"\\/") + 1));
         if (!validName(source->name)) { notice("Unsupported filename (maximum 200 UTF-8 bytes).", true); return false; }
         source->peers.insert(peers.begin(),peers.end());
-        source->expires = GetTickCount64() + 600000;
+        source->expires = GetTickCount64() + OfferLifetimeMs;
         const string id = randomId(); auto file = source->file;
         if (!io.submit([this,file,path,id]() -> FileIoQueue::Completion {
             // Deny concurrent writers/deletion throughout all recipients' transfers.
@@ -186,7 +187,7 @@ public:
                 auto it = sources.find(id); if (it == sources.end()) return;
                 auto source = it->second;
                 if (!ok) { sources.erase(it); notice("Cannot offer file: inaccessible, in use, or exceeds 4,294,967,296 bytes.",true); return; }
-                source->size = size.QuadPart; source->expires = GetTickCount64()+600000;
+                source->size = size.QuadPart; source->expires = GetTickCount64()+OfferLifetimeMs;
                 auto raw = header(Offer,id); raw.putUInt64(source->size); raw.putString(source->name,200);
                 for (auto peer=source->peers.begin();peer!=source->peers.end();)
                     if (!transmit(*peer,raw)) peer=source->peers.erase(peer); else ++peer;
@@ -204,7 +205,7 @@ public:
         size_t images=0;for(const auto& entry:sources)if(entry.second->file->image)++images;
         if(images>=16){notice("Cancel an image offer before pasting another.",true);return false;}
         auto source=std::make_shared<Source>();source->file=newFile();source->file->image=image;
-        source->name="image";source->expires=GetTickCount64()+600000;source->peers.insert(peers.begin(),peers.end());
+        source->name="image";source->expires=GetTickCount64()+OfferLifetimeMs;source->peers.insert(peers.begin(),peers.end());
         const string id=randomId();sources[id]=source;
         if(!io.submit([this,id,image=std::move(image)]() mutable -> FileIoQueue::Completion {
             auto packed=Screenshot::compress(std::move(image));
@@ -212,7 +213,7 @@ public:
                 auto it=sources.find(id);if(it==sources.end())return;
                 if(!packed){sources.erase(it);notice("Could not prepare image.",true);return;}
                 auto& source=*it->second;source.file->image=packed;source.size=packed->bytes.size();
-                source.expires=GetTickCount64()+600000;
+                source.expires=GetTickCount64()+OfferLifetimeMs;
                 auto raw=header(packed->compressed()?CompressedImageOffer:ImageOffer,id);
                 raw.putUInt64(source.size);raw.putString(source.name,200);
                 for(auto peer=source.peers.begin();peer!=source.peers.end();)
@@ -461,7 +462,7 @@ public:
         retryControls(now);
         for (auto it = downloads.begin(); it != downloads.end();) {
             if (it->second.file && now - it->second.touched > 30000) failDownload(it->first,it->second,"timed out");
-            if (!it->second.file && now - it->second.touched > 600000) it = downloads.erase(it); else ++it;
+            if (!it->second.file && now - it->second.touched > OfferLifetimeMs) it = downloads.erase(it); else ++it;
         }
         for (auto it = uploads.begin(); it != uploads.end();) {
             if (now - it->second.touched > 30000) { control(Cancel,it->first,it->second.token); notice("File upload timed out.",true); it = uploads.erase(it); } else ++it;

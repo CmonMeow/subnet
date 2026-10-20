@@ -17,6 +17,9 @@ public:
         bool connected=network.hasConnection();if(wasConnected&&!connected)show(directory);wasConnected=connected;
         if(!shown(network)||!input.leftClick())return;
         const int top=App.size.y-34;
+        if(hit(App.size.x-148,48,128,22)){
+            directory.cycleFilter();displayedEntries.clear();haveEntries=false;input.KeyUp(VK_LBUTTON);return;
+        }
         for(size_t i=0;i<displayedEntries.size();++i)if(hit(20,top-64-(int)i*18,App.size.x-40,18)){
             std::string address=HostDirectory::addressText(displayedEntries[i]);input.KeyUp(VK_LBUTTON);
             if(!network.hasConnection())network.connectTo(address);return;
@@ -42,7 +45,8 @@ public:
         QueueChatText(status.c_str(),24,(float)top-39,.58f,.62f,.62f);
         for(size_t i=0;i<displayedEntries.size();++i){
             const auto& e=displayedEntries[i];int y=top-64-(int)i*18;
-            std::string label=FitChatText(e.name,App.size.x-48);
+            const bool publicHost=(e.users&HostDirectory::PublicHost)!=0;
+            std::string label=FitChatText(std::string(publicHost?"[Public] ":"[Private] ")+e.name,App.size.x-48);
             if(hit(20,y,App.size.x-40,18)){
                 QueueChatRect(20,(float)y,(float)App.size.x-20,(float)y+18,.02f,.10f,.14f,1,false);
                 ChatCursorResource=IDC_POINTER_YELLOW;
@@ -50,6 +54,8 @@ public:
             QueueChatText(label.c_str(),24,(float)y+2,.35f,.85f,1.f);
         }
         DrawChatButton("REFRESH",vec2i(20,48),false,false,vec3f(.35f,.85f,1.f));
+        const auto filter=directory.hostFilter();
+        DrawChatButton(filter==HostDirectory::HostFilter::All?"ALL":filter==HostDirectory::HostFilter::Public?"PUBLIC":"PRIVATE",vec2i(App.size.x-148,48),filter!=HostDirectory::HostFilter::All);
         if(displayedPage>0)DrawChatButton("PREVIOUS",vec2i(156,48),false,false,vec3f(.35f,.85f,1.f));
         if(displayedPage+1<displayedPages)DrawChatButton("NEXT",vec2i(displayedPage>0?292:156,48),false,false,vec3f(.35f,.85f,1.f));
     }

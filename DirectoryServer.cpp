@@ -112,8 +112,8 @@ static int runDirectory(int argc,wchar_t** argv,bool console) {
             auto reply=[&](Packet response,const sockaddr_in& to){sign(response,key);HostDirectory::send(socket,to,response);};
             if(p.kind==Browse || (p.kind==Register && !authorized(from,p,now))){
                 Packet response;response.kind=Challenge;memcpy(response.nonce,p.nonce,16);cookie(from,p,now/30000,response.cookie);reply(response,from);
-            }else if(p.kind==Fetch && authorized(from,p,now)){
-                entries.clear();for(const auto& h:hosts)if(h.second.expires>now && h.second.entry.version==p.version)entries.push_back(h.second.entry);
+            }else if(p.kind==Fetch && p.users<=uint16_t(HostFilter::Private) && authorized(from,p,now)){
+                entries.clear();for(const auto& h:hosts)if(h.second.expires>now && h.second.entry.version==p.version && matchesFilter(h.second.entry.users,HostFilter(p.users)))entries.push_back(h.second.entry);
                 Packet response;response.kind=List;memcpy(response.nonce,p.nonce,16);response.pages=(uint16_t)((std::max)(size_t(1),(entries.size()+PageSize-1)/PageSize));response.page=(std::min)(p.page,uint16_t(response.pages-1));
                 size_t first=response.page*PageSize;response.count=(uint8_t)(first<entries.size()?(std::min)(size_t(PageSize),entries.size()-first):0);
                 for(unsigned i=0;i<response.count;++i)response.entries[i]=entries[first+i];reply(response,from);
