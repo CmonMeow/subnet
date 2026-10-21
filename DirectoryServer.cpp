@@ -2,7 +2,6 @@
 #include "UpdateServer.h"
 #include "DirectoryTray.h"
 #include <windows.h>
-#include <sddl.h>
 #include <map>
 #include <array>
 #include <vector>
@@ -10,18 +9,6 @@
 #include <cstdio>
 
 using namespace HostDirectory;
-static bool identity(const std::wstring& path,unsigned char* key,bool create) {
-    HANDLE file=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
-    if(file!=INVALID_HANDLE_VALUE){DWORD n=0;LARGE_INTEGER size={};bool ok=GetFileSizeEx(file,&size)&&size.QuadPart==crypto_sign_SECRETKEYBYTES&&ReadFile(file,key,crypto_sign_SECRETKEYBYTES,&n,nullptr)&&n==crypto_sign_SECRETKEYBYTES;CloseHandle(file);return ok;}
-    if(!create || GetLastError()!=ERROR_FILE_NOT_FOUND)return false;
-    unsigned char publicBytes[crypto_sign_PUBLICKEYBYTES];crypto_sign_keypair(publicBytes,key);
-    PSECURITY_DESCRIPTOR descriptor=nullptr;
-    if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;FA;;;SY)(A;;FA;;;OW)",SDDL_REVISION_1,&descriptor,nullptr))return false;
-    SECURITY_ATTRIBUTES attributes={sizeof(attributes),descriptor,FALSE};
-    file=CreateFileW(path.c_str(),GENERIC_WRITE,0,&attributes,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);LocalFree(descriptor);
-    if(file==INVALID_HANDLE_VALUE)return false;
-    DWORD n=0;bool ok=WriteFile(file,key,crypto_sign_SECRETKEYBYTES,&n,nullptr)&&n==crypto_sign_SECRETKEYBYTES;CloseHandle(file);return ok;
-}
 struct Listing { Entry entry; sockaddr_in owner; Packet registration; ULONGLONG expires; };
 struct Pending { Packet packet; sockaddr_in owner,game; ULONGLONG expires,lastProbe; };
 struct Budget { ULONGLONG start=0;unsigned packets=0; };
@@ -31,31 +18,26 @@ static BOOL WINAPI consoleControl(DWORD event) {
     return FALSE;
 }
 static int runDirectory(int argc,wchar_t** argv,bool console) {
-    bool init=false;unsigned port=Port;std::wstring keyPath;std::string bindAddress="0.0.0.0";
+    unsigned port=Port;std::string bindAddress="0.0.0.0";
     for(int i=1;i<argc;++i){
         std::wstring arg=argv[i];
-        if(arg==L"--init")init=true;
-        else if(arg==L"--console"){}
-        else if(arg==L"--key"&&i+1<argc)keyPath=argv[++i];
+        if(arg==L"--console"){}
         else if(arg==L"--port"&&i+1<argc){wchar_t* end=nullptr;unsigned long n=wcstoul(argv[++i],&end,10);if(!end||*end||n<1||n>65535)return 2;port=(unsigned)n;}
         else if(arg==L"--bind"&&i+1<argc){std::wstring value=argv[++i];bindAddress.clear();for(wchar_t c:value){if(c>127)return 2;bindAddress.push_back(static_cast<char>(c));}}
-        else {fwprintf(stderr,L"Usage: subnet-directory [--console] [--init] [--key path] [--bind IPv4] [--port 778]\n");return 2;}
-    }
-    if(keyPath.empty()) {
-        wchar_t executable[32768];DWORD length=GetModuleFileNameW(nullptr,executable,32768);
-        if(!length||length>=32768)return 2;
-        std::wstring folder(executable,length);auto slash=folder.find_last_of(L"\\/");if(slash==std::wstring::npos)return 2;
-        folder.resize(slash);folder+=L"\\..\\private";
-        if(init&&!CreateDirectoryW(folder.c_str(),nullptr)&&GetLastError()!=ERROR_ALREADY_EXISTS)return 2;
-        keyPath=folder+L"\\directory.key";
+        else {fwprintf(stderr,L"Usage: subnet-directory [--console] [--bind IPv4] [--port 778]\n");return 2;}
     }
     if(sodium_init()<0)return 2;
     unsigned char key[crypto_sign_SECRETKEYBYTES]={};
     struct ClearKey {unsigned char* key;~ClearKey(){sodium_memzero(key,crypto_sign_SECRETKEYBYTES);}} clearKey{key};
-    if(!identity(keyPath,key,init)){fwprintf(stderr,L"Cannot load directory identity: %ls. Use --init once to create it.\n",keyPath.c_str());return 2;}
-    if(init){unsigned char pk[crypto_sign_PUBLICKEYBYTES];crypto_sign_ed25519_sk_to_pk(pk,key);char hex[65];sodium_bin2hex(hex,sizeof(hex),pk,sizeof(pk));printf("Public key: %s\n",hex);fwprintf(stdout,L"Private identity: %ls\n",keyPath.c_str());if(!console)MessageBoxA(nullptr,hex,"Directory public key",MB_OK|MB_ICONINFORMATION);return 0;}
+    const auto module=GetModuleHandleW(nullptr);
+    const auto resource=FindResourceW(module,MAKEINTRESOURCEW(101),MAKEINTRESOURCEW(10));
+    const void* identity=resource?LockResource(LoadResource(module,resource)):nullptr;
+    if(!identity || SizeofResource(module,resource)!=sizeof(key)){
+        fprintf(stderr,"Embedded directory identity is missing or invalid. Rebuild the directory.\n");return 2;
+    }
+    memcpy(key,identity,sizeof(key));
     unsigned char loadedPublicKey[crypto_sign_PUBLICKEYBYTES];crypto_sign_ed25519_sk_to_pk(loadedPublicKey,key);
-    if(sodium_memcmp(loadedPublicKey,publicKey(),sizeof(loadedPublicKey))!=0){fprintf(stderr,"Directory key does not match this release. Restore the original identity key or rebuild with the new public key.\n");sodium_memzero(key,sizeof(key));return 2;}
+    if(sodium_memcmp(loadedPublicKey,publicKey(),sizeof(loadedPublicKey))!=0){fprintf(stderr,"Directory key does not match this release. Rebuild the directory with the original identity.\n");sodium_memzero(key,sizeof(key));return 2;}
     WSADATA wsa;if(WSAStartup(MAKEWORD(2,2),&wsa))return 2;
     struct Winsock {~Winsock(){WSACleanup();}} winsock;
     SOCKET socket=::socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);if(socket==INVALID_SOCKET)return 2;
@@ -178,6 +160,6 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
         SetConsoleCtrlHandler(consoleControl,TRUE);
     }
     const int result=runDirectory(argc,argv,console);LocalFree(argv);
-    if(result && !console)MessageBoxW(nullptr,L"The directory could not start or continue running. Check its identity key and port availability. Use --console for diagnostic details.",L"subnet directory",MB_OK|MB_ICONERROR);
+    if(result && !console)MessageBoxW(nullptr,L"The directory could not start or continue running. Use --console to see the exact error. The identity is built in; another running directory may already be using its port.",L"subnet directory",MB_OK|MB_ICONERROR);
     return result;
 }

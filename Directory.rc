@@ -1,5 +1,7 @@
 #include <windows.h>
 1 ICON "Icon.ico"
+// Operator-only identity; this resource belongs to the directory project only.
+101 RCDATA "private/directory.key"
 1 VERSIONINFO
  FILEVERSION 0,1,0,0
  PRODUCTVERSION 0,1,0,0
