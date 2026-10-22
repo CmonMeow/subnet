@@ -29,10 +29,11 @@ class HostDirectoryClient {
         haveListing=false;registering=false;lastPublished=0;
     }
 public:
+    bool listed() const {return hosting&&haveListing&&lastPublished&&GetTickCount64()-lastPublished<HostDirectory::LeaseMs;}
     std::vector<HostDirectory::Entry> entries;
     unsigned page=0,pages=1;
     unsigned long long entriesRevision=0;
-    std::string status="Finding hosts...",publishStatus;
+    std::string status="Finding hosts...";
     explicit HostDirectoryClient(const std::string& address,uint32_t appVersion):hostname(address),version(appVersion) {
         sodium_init();directory.sin_family=AF_INET;directory.sin_port=htons(HostDirectory::Port);
         auto colon=hostname.find(':');if(colon!=std::string::npos){
@@ -66,14 +67,13 @@ public:
     void update(bool isHost,unsigned short port,unsigned users,const std::string& hostName,bool publicHost=false) {
         using namespace HostDirectory;auto now=GetTickCount64();
         if(isHost&&(publishedName!=hostName || publishedPublic!=publicHost)){cancelRegistration();publishedName=hostName;publishedPublic=publicHost;nextRegistration=0;}
-        if(hosting&&!isHost)retire();if(hosting!=isHost){hosting=isHost;nextRegistration=0;publishStatus=hosting?"Publishing host...":"";}
+        if(hosting&&!isHost)retire();if(hosting!=isHost){hosting=isHost;nextRegistration=0;}
         // Expiry must run even while DNS resolution is failing.
         if(lastList&&now-lastList>=LeaseMs){entries.clear();++entriesRevision;lastList=0;page=0;pages=1;status="Directory unavailable. Use /connect or the HOST button.";}
-        if(lastPublished&&now-lastPublished>=LeaseMs)publishStatus="Host listing expired. Check UDP forwarding.";
-        if(socket==INVALID_SOCKET){if(hosting)publishStatus="Directory unavailable. Direct connections still work.";return;}
+        if(socket==INVALID_SOCKET)return;
         if(!resolved){
             if(!resolving&&now>=nextResolve){resolver.start(hostname);resolving=true;nextResolve=now+30000;}
-            if(resolving){int result=resolver.poll(directory);if(result){resolving=false;resolved=result>0;if(!resolved){status="Directory unavailable. Use /connect or the HOST button.";if(hosting)publishStatus="Directory unavailable. Direct connections still work.";}}}
+            if(resolving){int result=resolver.poll(directory);if(result){resolving=false;resolved=result>0;if(!resolved){status="Directory unavailable. Use /connect or the HOST button.";}}}
             if(!resolved)return;
         }
         for(unsigned work=0;work<32;++work){
@@ -97,7 +97,7 @@ public:
             }
             if(hosting&&registering&&sodium_memcmp(p.nonce,registration.nonce,16)==0){
                 if(p.kind==Challenge&&sodium_is_zero(registration.cookie,16)){memcpy(registration.cookie,p.cookie,16);send(socket,directory,registration);}
-                else if(p.kind==Listed){registering=false;haveListing=true;lastListed=registration;listedDirectory=directory;lastPublished=now;nextRegistration=now+20000;publishStatus="Listed in host browser.";}
+                else if(p.kind==Listed){registering=false;haveListing=true;lastListed=registration;listedDirectory=directory;lastPublished=now;nextRegistration=now+20000;}
             }
         }
         if(now>=nextQuery){
@@ -115,7 +115,7 @@ public:
                 const std::string name=hostName.empty()?"Host":hostName;strncpy_s(registration.name,name.c_str(),32);
                 randombytes_buf(registration.nonce,16);registrationAttempts=0;registering=true;HostDirectoryProbe::instance().set(directory,registration);
             }
-            if(registrationAttempts++>=4){cancelRegistration();nextRegistration=now+20000;publishStatus="Host not listed. Check directory and UDP forwarding.";}
+            if(registrationAttempts++>=4){cancelRegistration();nextRegistration=now+20000;}
             else {send(socket,directory,registration);nextRegistration=now+2000;}
         }
     }

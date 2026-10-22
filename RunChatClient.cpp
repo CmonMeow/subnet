@@ -241,6 +241,7 @@ void RunChatClient(HWND hWnd)
     const HCURSOR cyanCursor=LoadCursorA(GetModuleHandleA(nullptr),MAKEINTRESOURCEA(IDC_POINTER_CYAN));
     const HCURSOR greenCursor=LoadCursorA(GetModuleHandleA(nullptr),MAKEINTRESOURCEA(IDC_POINTER_GREEN));
     const HCURSOR yellowCursor=LoadCursorA(GetModuleHandleA(nullptr),MAKEINTRESOURCEA(IDC_POINTER_YELLOW));
+    const HCURSOR redCursor=LoadCursorA(GetModuleHandleA(nullptr),MAKEINTRESOURCEA(IDC_POINTER_RED));
     DragAcceptFiles(hWnd,TRUE);
     PackedClientSettings settings;
     cNetworkRuntime network(hWnd, &settings);
@@ -262,7 +263,6 @@ void RunChatClient(HWND hWnd)
     UpdateClient updater(HostDirectoryClient::configuredAddress(DEFAULT_NETWORK_ADDRESS));
     HostBrowser browser;
     cChatBox chatBox;chatBox.restoreDraft(resumeDraft);
-    string previousPublishStatus;
     cVoiceChat voiceChat;voiceChat.restoreMicLatch(resumeMic);
     MessageChimeCooldown chimeCooldown;
     std::function<void(bool)> appFocusChanged = [&](bool active) {
@@ -349,11 +349,6 @@ void RunChatClient(HWND hWnd)
         network.update();
         directory.update(network.isHost(),network.hostingPort(),(unsigned)network.participants().size(),settings.hostName,network.publicHost());
         if(!modal) browser.update(network,directory);
-        if(directory.publishStatus!=previousPublishStatus){
-            previousPublishStatus=directory.publishStatus;
-            if(network.isHost()&&!previousPublishStatus.empty()&&previousPublishStatus!="Publishing host...")
-                network.showNotice(previousPublishStatus,previousPublishStatus!="Listed in host browser.");
-        }
         if(!network.isHost() && !network.clientReady()) screenShare.close();
         ScreenSignaling::Event screenEvent;
         while(network.popScreenEvent(screenEvent)) screenShare.receive(screenEvent);
@@ -423,7 +418,7 @@ void RunChatClient(HWND hWnd)
         input.ConsumeMouseWheel();
         const bool talkDown = !modal && !selectingHotkey && !releaseHotkey &&
             (screenShare.focused() ? (GetAsyncKeyState(settings.talkKey)&0x8000)!=0 :
-             input.pressed(settings.talkKey) && !chatBox.active());
+             GetForegroundWindow()==hWnd && input.pressed(settings.talkKey) && !chatBox.active());
         voiceChat.update(network, talkDown, settings, micClicked);
         if (!settings.flushVolumes(now)) network.showNotice("Could not save user volumes.", true);
 
@@ -449,7 +444,8 @@ void RunChatClient(HWND hWnd)
             DrawChatButton(!network.hasConnection() ? "HOST" : screenShare.watching() ? "STOP WATCH" : screenShare.sharing() ? "STOP SHARE" : "SCREEN",screenButton,screenShare.sharing() || screenShare.watching());
             if(network.isHost())DrawChatButton(network.publicHost()?"PUBLIC":"PRIVATE",privacyButton,network.publicHost());
             userVolumes.draw(voiceChat);
-            const HCURSOR cursor=ChatCursorResource==IDC_POINTER_GREEN ? greenCursor : ChatCursorResource==IDC_POINTER_YELLOW ? yellowCursor : cyanCursor;
+            const HCURSOR cursor=network.isHost()&&!directory.listed() ? redCursor :
+                ChatCursorResource==IDC_POINTER_GREEN ? greenCursor : ChatCursorResource==IDC_POINTER_YELLOW ? yellowCursor : cyanCursor;
             if(reinterpret_cast<HCURSOR>(GetClassLongPtrA(hWnd,GCLP_HCURSOR))!=cursor)
                 SetClassLongPtrA(hWnd,GCLP_HCURSOR,reinterpret_cast<LONG_PTR>(cursor));
             POINT mouse;GetCursorPos(&mouse);
