@@ -1857,10 +1857,8 @@ public:
         for(size_t i=0;i<previous.size();) {
             auto line=previous[i++];
             if(!line.message){line.historyId=++_nextChatLineId;_chatLines.push_back(std::move(line));continue;}
-            size_t end=line.messageOffset+line.text.size();
-            while(i<previous.size() && previous[i].message==line.message) {
-                end=previous[i].messageOffset+previous[i].text.size();++i;
-            }
+            const size_t end=line.message->size();
+            while(i<previous.size() && previous[i].message==line.message)++i;
             appendWrappedChat(std::move(line),end);
         }
         if(_chatLines.size()>CHAT_MAX_HISTORY_LINES)

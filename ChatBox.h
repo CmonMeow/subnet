@@ -16,6 +16,7 @@ class cChatBox
     bool _active;
     string _draft;
     size_t _cursor;
+    bool _cursorPreviousRow=false;
     size_t _inputViewStart;
     mutable string _layoutDraft;
     mutable int _draftWidth=0;
@@ -62,7 +63,7 @@ class cChatBox
         const size_t first=last>rows?last-rows:0;if(first==last)return false;
         const int top=BOX_Y+(int)rows*LINE_HEIGHT+inputHeight()+18-22;
         const int mouseY=App.size.y-input.mouse.y;
-        int row=(int)floor((top+LINE_HEIGHT-2-mouseY)/(double)LINE_HEIGHT);
+        int row=(int)ceil((top-2-mouseY)/(double)LINE_HEIGHT);
         if(!clamp&&(row<0||row>=(int)(last-first)||input.mouse.x<BOX_X||input.mouse.x>BOX_X+boxWidth()))return false;
         row=(std::max)(0,(std::min)(row,(int)(last-first)-1));
         const auto& line=lines[first+row];auto text=historyText(network,line);
@@ -216,7 +217,7 @@ class cChatBox
             text.resize(available);
         }
         _draft.insert(_cursor, text);
-        _cursor += text.size();
+        _cursor += text.size();_cursorPreviousRow=false;
     }
 
     size_t visibleRows() const
@@ -232,7 +233,7 @@ class cChatBox
     void updateLayout(cNetworkRuntime& network) {
         const int width=(int)boxWidth();
         if(width==_layoutWidth)return;
-        _layoutWidth=width;_inputViewStart=0;
+        _layoutWidth=width;_inputViewStart=0;_cursorPreviousRow=false;
         const auto& old=network.chatLines();
         const size_t bottom=old.size()>_scrollOffset?old.size()-_scrollOffset:0;
         const auto anchor=bottom?old[bottom-1]:NetworkChatLine{};
@@ -243,7 +244,7 @@ class cChatBox
             for(size_t i=0;i<lines.size();++i)
                 if((anchor.message && lines[i].message==anchor.message &&
                     lines[i].messageOffset<=anchor.messageOffset &&
-                    lines[i].messageOffset+lines[i].text.size()>anchor.messageOffset) ||
+                    (lines[i].messageOffset+lines[i].text.size()>anchor.messageOffset || lines[i].messageOffset==anchor.messageOffset)) ||
                     (!anchor.message && !lines[i].message && lines[i].kind==anchor.kind &&
                      lines[i].fileSender==anchor.fileSender && lines[i].fileId==anchor.fileId)) {
                     _scrollOffset=lines.size()-i-1;break;
@@ -257,7 +258,7 @@ class cChatBox
     {
         if (_cursor > _draft.size())
         {
-            _cursor = _draft.size();
+            _cursor = _draft.size();_cursorPreviousRow=false;
         }
     }
 
@@ -281,7 +282,7 @@ class cChatBox
     }
     int inputHeight() const {return INPUT_HEIGHT+((int)(std::min)(_inputRowLimit,draftRows().size())-1)*LINE_HEIGHT;}
     size_t inputFirstRow() {
-        clampCursor();const auto& rows=draftRows();const size_t cursorRow=ChatInputRowAt(rows,_cursor);
+        clampCursor();const auto& rows=draftRows();const size_t cursorRow=ChatInputRowAt(rows,_cursor,_cursorPreviousRow);
         if(cursorRow<_inputViewStart)_inputViewStart=cursorRow;
         if(cursorRow>=_inputViewStart+_inputRowLimit)_inputViewStart=cursorRow-_inputRowLimit+1;
         _inputViewStart=(std::min)(_inputViewStart,rows.size()>_inputRowLimit?rows.size()-_inputRowLimit:0);
@@ -291,15 +292,18 @@ class cChatBox
         const auto& rows=draftRows();const size_t first=inputFirstRow();
         const int visible=(int)(std::min)(_inputRowLimit,rows.size());
         const int top=INPUT_TEXT_Y+(visible-1)*LINE_HEIGHT;
-        int row=(int)floor((top+LINE_HEIGHT-2-(App.size.y-input.mouse.y))/(double)LINE_HEIGHT);
+        int row=(int)ceil((top-2-(App.size.y-input.mouse.y))/(double)LINE_HEIGHT);
         row=(std::max)(0,(std::min)(row,visible-1));
         _cursor=ChatInputColumn(_draft,rows[first+row],input.mouse.x-INPUT_TEXT_X-ChatTextWidth("> "));
+        _cursorPreviousRow=(_cursor==rows[first+row].second);
     }
     void moveInputRow(int direction) {
-        const auto& rows=draftRows();const size_t row=ChatInputRowAt(rows,_cursor);
+        const auto& rows=draftRows();const size_t row=ChatInputRowAt(rows,_cursor,_cursorPreviousRow);
         if((direction<0 && !row)||(direction>0 && row+1==rows.size()))return;
         const int x=ChatTextWidth(_draft.substr(rows[row].first,_cursor-rows[row].first));
-        _cursor=ChatInputColumn(_draft,rows[direction<0?row-1:row+1],x);
+        const auto target=rows[direction<0?row-1:row+1];
+        _cursor=ChatInputColumn(_draft,target,x);
+        _cursorPreviousRow=(_cursor==target.second);
     }
 
     static bool IsUrlChar(char c)
@@ -385,7 +389,7 @@ class cChatBox
         for (size_t i = first; i < newestExclusive; ++i)
         {
             const float lineY = textTop - (float)(i - first) * LINE_HEIGHT;
-            if (mouseY >= lineY - 2.f && mouseY <= lineY + LINE_HEIGHT - 2.f && mouseX >= BOX_X + 8.f && mouseX < BOX_X+boxWidth()-8.f)
+            if (mouseY >= lineY - 2.f && mouseY < lineY + LINE_HEIGHT - 2.f && mouseX >= BOX_X + 8.f && mouseX < BOX_X+boxWidth()-8.f)
             {
                 if(lines[i].kind==CLKScreen || lines[i].kind==CLKFile || lines[i].kind==CLKImage){
                     const auto link=network.chatLink(lines[i]);
@@ -441,7 +445,7 @@ class cChatBox
                             {
                                 prepareCommand(command.c_str());
                                 _draft += draft;
-                                _cursor = _draft.size();
+                                _cursor = _draft.size();_cursorPreviousRow=false;
                             }
                         }
                         return true;
@@ -558,7 +562,7 @@ class cChatBox
     {
         string text = Trim(_draft);
         _draft.clear();
-        _cursor = 0;
+        _cursor = 0;_cursorPreviousRow=false;
         _inputViewStart = 0;
         _active = false;
         if (text.empty())
@@ -580,11 +584,11 @@ public:
     void nameRows(int rows) { _nameRows=rows; }
     bool linkHovered(cNetworkRuntime& network) { return openLinkUnderMouse(network,false); }
     const string& draft() const {return _draft;}
-    void restoreDraft(const string& text){_draft=SanitiseChatText(text);_cursor=_draft.size();}
+    void restoreDraft(const string& text){_draft=SanitiseChatText(text);_cursor=_draft.size();_cursorPreviousRow=false;}
     void prepareCommand(const char* command)
     {
         _draft = string(command) + " ";
-        _cursor = _draft.size();
+        _cursor = _draft.size();_cursorPreviousRow=false;
         _inputViewStart = 0;
         _active = true;
         _selecting = false;
@@ -683,7 +687,7 @@ public:
         if(input.pressed(VK_ESCAPE))_selection.clear();
         if (ControlDown() && input.pressed('V'))
         {
-            if (!_active) { _active = true; _cursor = _draft.size(); }
+            if (!_active) { _active = true; _cursor = _draft.size();_cursorPreviousRow=false; }
             pasteClipboard(network);
             DrainTextInput();
             input.KeyUp('V');
@@ -694,7 +698,7 @@ public:
             if (input.pressed(VK_RETURN) || input.leftClick() && capturesMouse)
             {
                 _active = true;
-                _cursor = _draft.size();
+                _cursor = _draft.size();_cursorPreviousRow=false;
                 DrainTextInput();
                 input.KeyUp(VK_RETURN);
                 input.KeyUp(VK_LBUTTON);
@@ -703,7 +707,7 @@ public:
             {
                 _active = true;
                 _draft = "/";
-                _cursor = _draft.size();
+                _cursor = _draft.size();_cursorPreviousRow=false;
                 DrainTextInput();
                 input.KeyUp(VK_OEM_2);
             }
@@ -722,7 +726,7 @@ public:
             if (_draft.size() < CHAT_MAX_MESSAGE_CHARS)
             {
                 _draft.insert(_cursor, 1, (char)c);
-                ++_cursor;
+                ++_cursor;_cursorPreviousRow=false;
             }
         }
 
@@ -731,7 +735,7 @@ public:
             if (_cursor > 0 && !_draft.empty())
             {
                 _draft.erase(_cursor - 1, 1);
-                --_cursor;
+                --_cursor;_cursorPreviousRow=false;
             }
             input.KeyUp(VK_BACK);
         }
@@ -739,7 +743,7 @@ public:
         {
             if (_cursor < _draft.size())
             {
-                _draft.erase(_cursor, 1);
+                _draft.erase(_cursor, 1);_cursorPreviousRow=false;
             }
             input.KeyUp(VK_DELETE);
         }
@@ -747,7 +751,7 @@ public:
         {
             if (_cursor > 0)
             {
-                --_cursor;
+                --_cursor;_cursorPreviousRow=false;
             }
             input.KeyUp(VK_LEFT);
         }
@@ -755,7 +759,7 @@ public:
         {
             if (_cursor < _draft.size())
             {
-                ++_cursor;
+                ++_cursor;_cursorPreviousRow=false;
             }
             input.KeyUp(VK_RIGHT);
         }
@@ -763,18 +767,20 @@ public:
         if(input.pressed(VK_DOWN)){moveInputRow(1);input.KeyUp(VK_DOWN);}
         if (input.pressed(VK_HOME))
         {
-            _cursor = draftRows()[ChatInputRowAt(draftRows(),_cursor)].first;
+            _cursor = draftRows()[ChatInputRowAt(draftRows(),_cursor,_cursorPreviousRow)].first;
+            _cursorPreviousRow=false;
             input.KeyUp(VK_HOME);
         }
         if (input.pressed(VK_END))
         {
-            _cursor = draftRows()[ChatInputRowAt(draftRows(),_cursor)].second;
+            _cursor = draftRows()[ChatInputRowAt(draftRows(),_cursor,_cursorPreviousRow)].second;
+            _cursorPreviousRow=true;
             input.KeyUp(VK_END);
         }
         if (input.pressed(VK_ESCAPE) || input.leftClick() && !capturesMouse)
         {
             _draft.clear();
-            _cursor = 0;
+            _cursor = 0;_cursorPreviousRow=false;
             _inputViewStart = 0;
             _active = false;
             input.KeyUp(VK_ESCAPE);
@@ -782,7 +788,7 @@ public:
         if (input.pressed(VK_RETURN))
         {
             if(GetKeyState(VK_SHIFT)&0x8000){
-                if(_draft.size()<CHAT_MAX_MESSAGE_CHARS){_draft.insert(_cursor,1,'\n');++_cursor;}
+                if(_draft.size()<CHAT_MAX_MESSAGE_CHARS){_draft.insert(_cursor,1,'\n');++_cursor;_cursorPreviousRow=false;}
             }else submit(network);
             input.KeyUp(VK_RETURN);
         }
@@ -857,7 +863,7 @@ public:
         if(_draft.empty())
             QueueChatText(FitChatText("Message or /command",(int)width-48).c_str(),x+10.f+ChatTextWidth("> "),y+12.f,.42f,.50f,.47f);
         if(_active && windowFocused && (GetTickCount64()/500)%2==0){
-            const size_t row=ChatInputRowAt(inputRows,_cursor);
+            const size_t row=ChatInputRowAt(inputRows,_cursor,_cursorPreviousRow);
             const float caretX=x+10.f+ChatTextWidth("> ")+ChatTextWidth(_draft.substr(inputRows[row].first,_cursor-inputRows[row].first));
             const float caretY=inputTop-(row-firstInput)*LINE_HEIGHT;
             QueueChatRect(caretX,caretY,caretX+1.f,caretY+14.f,.65f,.92f,1.f,1.f,false);

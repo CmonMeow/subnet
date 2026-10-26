@@ -19,8 +19,10 @@ inline std::vector<ChatInputRow> ChatInputRows(const std::string& text,size_t pi
     }
     return rows;
 }
-inline size_t ChatInputRowAt(const std::vector<ChatInputRow>& rows,size_t cursor) {
-    size_t row=0;while(row+1<rows.size() && rows[row+1].first<=cursor)++row;return row;
+inline size_t ChatInputRowAt(const std::vector<ChatInputRow>& rows,size_t cursor,bool previous=false) {
+    size_t row=0;while(row+1<rows.size() && rows[row+1].first<=cursor)++row;
+    if(previous && row && rows[row-1].second==cursor)--row;
+    return row;
 }
 inline size_t ChatInputColumn(const std::string& text,ChatInputRow row,int x) {
     size_t cursor=row.first;
