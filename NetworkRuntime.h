@@ -6,6 +6,7 @@
 #include "ImageViewer.h"
 #include "ScreenSignaling.h"
 #include "HostUpdate.h"
+#include "FontMetrics.h"
 #include <set>
 
 class cNetworkRuntime
@@ -169,20 +170,24 @@ class cNetworkRuntime
         if(_publicHistory.size()==PublicHistoryLimit)_publicHistory.erase(_publicHistory.begin());
         PublicMessage message;message.text=line;message.sequence=++_nextPublicMessage;GetLocalTime(&message.time);_publicHistory.push_back(std::move(message));
     }
-    size_t _chatWrapChars = CHAT_WRAP_CHARS;
+    size_t _chatWrapPixels = CHAT_WRAP_CHARS * 12;
     void appendWrappedChat(NetworkChatLine line, size_t end) {
         const auto& text=*line.message;
         size_t offset=line.messageOffset;
         while(offset<end) {
-            size_t count=(std::min)(_chatWrapChars,end-offset);
-            if(offset+count<end) {
+            const size_t newline=text.find('\n',offset);
+            const size_t paragraphEnd=(std::min)(end,newline);
+            size_t count=ChatTextFit(text,offset,paragraphEnd,_chatWrapPixels);
+            if(!count && offset<paragraphEnd)count=1;
+            if(offset+count<paragraphEnd) {
                 const size_t split=text.rfind(' ',offset+count);
                 if(split!=string::npos && split>offset)count=split-offset;
             }
             line.text=text.substr(offset,count);line.messageOffset=offset;
             line.historyId=++_nextChatLineId;_chatLines.push_back(line);
             offset+=count;
-            while(offset<end && text[offset]==' ')++offset;
+            if(offset==paragraphEnd && offset<end)++offset;
+            else while(offset<end && text[offset]==' ')++offset;
         }
     }
     unsigned long long _nextChatLineId = 0;
@@ -713,7 +718,7 @@ class cNetworkRuntime
                 string name;
                 if (!raw.getInt32(id) || id < 0 || !raw.getString(name, 48) || name.empty() || roster.count(id)) return;
                 roster[id] = {};
-                roster[id].name = SanitiseChatLine(name);
+                roster[id].name = SanitiseText(name,CHAT_MAX_LINE_CHARS);
             }
             if (!raw.fullyRead() || static_cast<__int32>(static_cast<unsigned __int32>(revision) - _rosterRevision) < 0) return;
             _rosterRevision = revision;
@@ -1050,7 +1055,7 @@ class cNetworkRuntime
             return;
         }
         if (!_hWnd) printf("%s\n", SanitiseChatLine(line).c_str());
-        string text = SanitiseChatLine(line);
+        string text = SanitiseText(line,CHAT_MAX_LINE_CHARS,kind==CLKNormal || kind==CLKPrivate);
         if(kind == CLKError || (!isHost() && !clientReady() && kind == CLKSystem)) {
             if(text != "connecting" && text != "disconnected" && text != "Hosting stopped.") {
                 _statusNotice = text;
@@ -1844,10 +1849,10 @@ public:
         return _throughputBPS;
     }
 
-    bool setChatWrap(size_t characters) {
-        characters=(std::max)(size_t(1),characters);
-        if(characters==_chatWrapChars)return false;
-        _chatWrapChars=characters;
+    bool setChatWrap(size_t pixels) {
+        pixels=(std::max)(size_t(1),pixels);
+        if(pixels==_chatWrapPixels)return false;
+        _chatWrapPixels=pixels;
         auto previous=std::move(_chatLines);_chatLines.clear();
         for(size_t i=0;i<previous.size();) {
             auto line=previous[i++];

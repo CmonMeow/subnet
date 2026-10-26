@@ -2,6 +2,7 @@
 
 #include <shellapi.h>
 #include "ChatSelection.h"
+#include "ChatInputLayout.h"
 
 class cChatBox
 {
@@ -16,8 +17,12 @@ class cChatBox
     string _draft;
     size_t _cursor;
     size_t _inputViewStart;
+    mutable string _layoutDraft;
+    mutable int _draftWidth=0;
+    mutable std::vector<ChatInputRow> _draftRows;
     size_t _scrollOffset;
     int _nameRows=1;
+    size_t _inputRowLimit=4;
     enum
     {
         BOX_X = 12,
@@ -27,7 +32,6 @@ class cChatBox
         INPUT_HEIGHT = 24,
         INPUT_TEXT_X = BOX_X + 10,
         INPUT_TEXT_Y = BOX_Y + 12,
-        INPUT_CHAR_WIDTH = 12,
         HISTORY_WHEEL_LINES = 3
     };
 
@@ -56,7 +60,7 @@ class cChatBox
         const auto& lines=network.chatLines();const size_t rows=visibleRows();
         const size_t last=lines.size()>_scrollOffset?lines.size()-_scrollOffset:0;
         const size_t first=last>rows?last-rows:0;if(first==last)return false;
-        const int top=BOX_Y+(int)rows*LINE_HEIGHT+INPUT_HEIGHT+18-22;
+        const int top=BOX_Y+(int)rows*LINE_HEIGHT+inputHeight()+18-22;
         const int mouseY=App.size.y-input.mouse.y;
         int row=(int)floor((top+LINE_HEIGHT-2-mouseY)/(double)LINE_HEIGHT);
         if(!clamp&&(row<0||row>=(int)(last-first)||input.mouse.x<BOX_X||input.mouse.x>BOX_X+boxWidth()))return false;
@@ -217,7 +221,7 @@ class cChatBox
 
     size_t visibleRows() const
     {
-        return (size_t)(std::max)(1, (App.size.y - 68 - (_nameRows-1)*18 - BOX_Y - INPUT_HEIGHT - 18) / LINE_HEIGHT);
+        return (size_t)(std::max)(1, (App.size.y - 68 - (_nameRows-1)*18 - BOX_Y - inputHeight() - 18) / LINE_HEIGHT);
     }
 
     float boxWidth() const
@@ -232,7 +236,7 @@ class cChatBox
         const auto& old=network.chatLines();
         const size_t bottom=old.size()>_scrollOffset?old.size()-_scrollOffset:0;
         const auto anchor=bottom?old[bottom-1]:NetworkChatLine{};
-        if(!network.setChatWrap((size_t)(std::max)(1,int(boxWidth()-24)/12)))return;
+        if(!network.setChatWrap((size_t)(std::max)(1,int(boxWidth()-24))))return;
         _selection.clear();_selecting=false;_hoverLine=0;
         const auto& lines=network.chatLines();
         if(_scrollOffset && bottom) {
@@ -268,38 +272,34 @@ class cChatBox
         }
     }
 
-    size_t inputViewStart()
-    {
-        clampCursor();
-        if (_cursor < _inputViewStart)
-        {
-            _inputViewStart = _cursor;
+    const std::vector<ChatInputRow>& draftRows() const {
+        const int width=(std::max)(1,int(boxWidth()-48));
+        if(_draftRows.empty() || _draftWidth!=width || _layoutDraft!=_draft){
+            _draftRows=ChatInputRows(_draft,width);_layoutDraft=_draft;_draftWidth=width;
         }
-        const size_t usableChars = (size_t)(std::max)(1,int(boxWidth()-48)/12);
-        if (_cursor > _inputViewStart + usableChars)
-        {
-            _inputViewStart = _cursor - usableChars;
-        }
-        if (_inputViewStart > _draft.size())
-        {
-            _inputViewStart = _draft.size();
-        }
+        return _draftRows;
+    }
+    int inputHeight() const {return INPUT_HEIGHT+((int)(std::min)(_inputRowLimit,draftRows().size())-1)*LINE_HEIGHT;}
+    size_t inputFirstRow() {
+        clampCursor();const auto& rows=draftRows();const size_t cursorRow=ChatInputRowAt(rows,_cursor);
+        if(cursorRow<_inputViewStart)_inputViewStart=cursorRow;
+        if(cursorRow>=_inputViewStart+_inputRowLimit)_inputViewStart=cursorRow-_inputRowLimit+1;
+        _inputViewStart=(std::min)(_inputViewStart,rows.size()>_inputRowLimit?rows.size()-_inputRowLimit:0);
         return _inputViewStart;
     }
-
-    void setCursorFromMouse()
-    {
-        const __int32 mouseX = input.mouse.x;
-        size_t viewStart = inputViewStart();
-        int relativeX = mouseX - INPUT_TEXT_X - ChatTextWidth("> ");
-        _cursor = viewStart;
-        while (_cursor < _draft.size())
-        {
-            int advance = _draft[_cursor] == ' ' ? 6 : 12;
-            if (relativeX < advance / 2) break;
-            relativeX -= advance;
-            ++_cursor;
-        }
+    void setCursorFromMouse() {
+        const auto& rows=draftRows();const size_t first=inputFirstRow();
+        const int visible=(int)(std::min)(_inputRowLimit,rows.size());
+        const int top=INPUT_TEXT_Y+(visible-1)*LINE_HEIGHT;
+        int row=(int)floor((top+LINE_HEIGHT-2-(App.size.y-input.mouse.y))/(double)LINE_HEIGHT);
+        row=(std::max)(0,(std::min)(row,visible-1));
+        _cursor=ChatInputColumn(_draft,rows[first+row],input.mouse.x-INPUT_TEXT_X-ChatTextWidth("> "));
+    }
+    void moveInputRow(int direction) {
+        const auto& rows=draftRows();const size_t row=ChatInputRowAt(rows,_cursor);
+        if((direction<0 && !row)||(direction>0 && row+1==rows.size()))return;
+        const int x=ChatTextWidth(_draft.substr(rows[row].first,_cursor-rows[row].first));
+        _cursor=ChatInputColumn(_draft,rows[direction<0?row-1:row+1],x);
     }
 
     static bool IsUrlChar(char c)
@@ -378,7 +378,7 @@ class cChatBox
         const size_t rows = visibleRows();
         const size_t newestExclusive = lines.size() > _scrollOffset ? lines.size() - _scrollOffset : 0;
         const size_t first = newestExclusive > rows ? newestExclusive - rows : 0;
-        const float height = (float)(rows * (size_t)LINE_HEIGHT) + INPUT_HEIGHT + 18.f;
+        const float height = (float)(rows * (size_t)LINE_HEIGHT) + inputHeight() + 18.f;
         const float textTop = BOX_Y + height - 22.f;
         const float mouseX = (float)input.mouse.x;
         const float mouseY = (float)(-input.mouse.y + App.size.y);
@@ -606,7 +606,7 @@ public:
 
     bool mouseOver() const
     {
-        const float height = (float)(visibleRows() * LINE_HEIGHT) + INPUT_HEIGHT + 18.f;
+        const float height = (float)(visibleRows() * LINE_HEIGHT) + inputHeight() + 18.f;
         const float width = boxWidth();
         const float mouseX = (float)input.mouse.x;
         const float mouseY = (float)(-input.mouse.y + App.size.y);
@@ -615,6 +615,7 @@ public:
 
     void update(cNetworkRuntime& network)
     {
+        _inputRowLimit=network.isHost()||network.clientReady()?4:1;
         updateLayout(network);
         const auto& current=network.chatLines();
         if((_scrollOffset || _selection.selected() || (_selecting && _selectionMoved))&&_historyTail&&!current.empty()&&current.back().historyId!=_historyTail)
@@ -758,14 +759,16 @@ public:
             }
             input.KeyUp(VK_RIGHT);
         }
+        if(input.pressed(VK_UP)){moveInputRow(-1);input.KeyUp(VK_UP);}
+        if(input.pressed(VK_DOWN)){moveInputRow(1);input.KeyUp(VK_DOWN);}
         if (input.pressed(VK_HOME))
         {
-            _cursor = 0;
+            _cursor = draftRows()[ChatInputRowAt(draftRows(),_cursor)].first;
             input.KeyUp(VK_HOME);
         }
         if (input.pressed(VK_END))
         {
-            _cursor = _draft.size();
+            _cursor = draftRows()[ChatInputRowAt(draftRows(),_cursor)].second;
             input.KeyUp(VK_END);
         }
         if (input.pressed(VK_ESCAPE) || input.leftClick() && !capturesMouse)
@@ -778,24 +781,27 @@ public:
         }
         if (input.pressed(VK_RETURN))
         {
-            submit(network);
+            if(GetKeyState(VK_SHIFT)&0x8000){
+                if(_draft.size()<CHAT_MAX_MESSAGE_CHARS){_draft.insert(_cursor,1,'\n');++_cursor;}
+            }else submit(network);
             input.KeyUp(VK_RETURN);
         }
     }
 
     void draw(cNetworkRuntime& network, bool windowFocused = true, bool showHistory = true)
     {
+        _inputRowLimit=showHistory?4:1;
         updateLayout(network);
         clampScroll(network);
         const float x = BOX_X;
         const float y = BOX_Y;
         const float width = boxWidth();
         const float lineHeight = LINE_HEIGHT;
-        const float inputHeight = INPUT_HEIGHT;
+        const float inputAreaHeight = (float)inputHeight();
         const vector<NetworkChatLine>& lines = network.chatLines();
         const size_t rows = visibleRows();
         const float historyHeight = (float)(rows * (size_t)lineHeight);
-        const float height = historyHeight + inputHeight + 18.f;
+        const float height = historyHeight + inputAreaHeight + 18.f;
 
         const float panelTop = showHistory ? y + height : 44.f;
         QueueChatRect(x, y, x + width, panelTop, .02f, .025f, .025f, .50f, false);
@@ -836,28 +842,25 @@ public:
             DrawChatLineWithLinks(lines[i], x + 8.f, textY - (float)(i - first) * lineHeight, r, g, b);
         }
 
-        size_t viewStart = inputViewStart();
-        string draft = _draft.substr(viewStart);
-        size_t cursorInView = _cursor - viewStart;
-        const size_t maxDraftChars = (size_t)(std::max)(1,int(width-48)/12);
-        if (draft.size() > maxDraftChars)
-        {
-            draft.resize(maxDraftChars);
-        }
-        if (cursorInView > draft.size())
-        {
-            cursorInView = draft.size();
-        }
-        string inputLine = "> " + draft;
+        const auto& inputRows=draftRows();
+        const size_t firstInput=inputFirstRow();
+        const size_t shown=(std::min)(_inputRowLimit,inputRows.size());
+        const float inputTop=y+12.f+(shown-1)*LINE_HEIGHT;
         if (_active && windowFocused)
-            QueueChatRect(x + 6.f, y + 6.f, x + width - 6.f, y + inputHeight + 4.f, .35f, .85f, 1.f, 1.f, true);
-        QueueChatText(inputLine.c_str(), x + 10.f, y + 12.f, .90f, .94f, .92f);
-        if (_draft.empty())
-            QueueChatText(FitChatText("Message or /command", (int)width - 48).c_str(), x + 28.f, y + 12.f, .42f, .50f, .47f);
-        if (_active && windowFocused && (GetTickCount64() / 500) % 2 == 0)
-        {
-            float caretX = x + 10.f + ChatTextWidth("> " + draft.substr(0, cursorInView));
-            QueueChatRect(caretX, y + 12.f, caretX + 1.f, y + 26.f, .65f, .92f, 1.f, 1.f, false);
+            QueueChatRect(x + 6.f, y + 6.f, x + width - 6.f, y + inputAreaHeight + 4.f, .35f, .85f, 1.f, 1.f, true);
+        for(size_t i=0;i<shown;++i){
+            const auto row=inputRows[firstInput+i];
+            const string label=(firstInput+i==0?"> ":"  ")+_draft.substr(row.first,row.second-row.first);
+            const float textX=x+10.f+(firstInput+i==0?0.f:ChatTextWidth("> ")-ChatTextWidth("  "));
+            QueueChatText(label.c_str(),textX,inputTop-i*LINE_HEIGHT,.90f,.94f,.92f);
+        }
+        if(_draft.empty())
+            QueueChatText(FitChatText("Message or /command",(int)width-48).c_str(),x+10.f+ChatTextWidth("> "),y+12.f,.42f,.50f,.47f);
+        if(_active && windowFocused && (GetTickCount64()/500)%2==0){
+            const size_t row=ChatInputRowAt(inputRows,_cursor);
+            const float caretX=x+10.f+ChatTextWidth("> ")+ChatTextWidth(_draft.substr(inputRows[row].first,_cursor-inputRows[row].first));
+            const float caretY=inputTop-(row-firstInput)*LINE_HEIGHT;
+            QueueChatRect(caretX,caretY,caretX+1.f,caretY+14.f,.65f,.92f,1.f,1.f,false);
         }
         if (showHistory) drawTimestamp(network,windowFocused);
 

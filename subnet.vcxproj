@@ -104,11 +104,13 @@
   <ItemGroup>
     <ClInclude Include="font.h" />
     <ClInclude Include="FontGlyphs.h" />
+    <ClInclude Include="FontMetrics.h" />
     <ClInclude Include="maff.h" />
     <ClInclude Include="sysdef.h" />
     <ClInclude Include="ChatBox.h" />
     <ClInclude Include="ChatLink.h" />
     <ClInclude Include="ChatSelection.h" />
+    <ClInclude Include="ChatInputLayout.h" />
     <ClInclude Include="ChatCommands.h" />
     <ClInclude Include="HostDirectoryProtocol.h" />
     <ClInclude Include="HostDirectoryProbe.h" />

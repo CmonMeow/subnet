@@ -146,7 +146,7 @@ struct ScreenShare::State : std::enable_shared_from_this<ScreenShare::State>
         const auto& kind=fields[0];
         if(kind=="ready") { ready=true;auto queue=std::move(pending);pending.clear();for(const auto& value:queue)post(value);return; }
         if(kind=="pick-finished"){picking=false;hideShareWindow();return;}
-        if(kind=="error"){notice(SanitiseChatLine(fields[4]),true);return;}
+        if(kind=="error"){notice(SanitiseText(fields[4],CHAT_MAX_LINE_CHARS),true);return;}
         if(kind=="video") {
             unsigned lw=0,lh=0,lf=0,rw=0,rh=0,rf=0;char extra=0;
             if(sscanf(fields[4].c_str(),"%u,%u,%u,%u,%u,%u%c",&lw,&lh,&lf,&rw,&rh,&rf,&extra)!=6 ||

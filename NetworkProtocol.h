@@ -60,14 +60,18 @@ struct NetworkChatLine
     string fileId;
 };
 
-inline string SanitiseText(const string& text, size_t maxChars)
+inline string SanitiseText(const string& text, size_t maxChars, bool multiline=false)
 {
     string result;
     result.reserve(text.size() < maxChars ? text.size() : maxChars);
     for (size_t i = 0; i < text.size() && result.size() < maxChars; ++i)
     {
         unsigned char c = (unsigned char)text[i];
-        if (c >= 32 && c != 127)
+        if(multiline && (c=='\r' || c=='\n')) {
+            if(c=='\r' && i+1<text.size() && text[i+1]=='\n')++i;
+            result.push_back('\n');
+        }
+        else if (c >= 32 && c != 127)
         {
             result.push_back((char)c);
         }
@@ -77,12 +81,12 @@ inline string SanitiseText(const string& text, size_t maxChars)
 
 inline string SanitiseChatText(const string& text)
 {
-    return SanitiseText(text, CHAT_MAX_MESSAGE_CHARS);
+    return SanitiseText(text, CHAT_MAX_MESSAGE_CHARS,true);
 }
 
 inline string SanitiseChatLine(const string& text)
 {
-    return SanitiseText(text, CHAT_MAX_LINE_CHARS);
+    return SanitiseText(text, CHAT_MAX_LINE_CHARS,true);
 }
 
 inline string TrimWhitespace(const string& text)

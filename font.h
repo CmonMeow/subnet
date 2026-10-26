@@ -1,28 +1,15 @@
-﻿#pragma once
+#pragma once
 #include <gl/GL.h>
 
-#include "FontGlyphs.h"
-
-#define Glyphs serif
-
-int ChatCharacterWidth(unsigned char c)
-{
-    return c == ' ' ? 6 : c == '\t' ? 18 : (c >= 33 && c <= 127 ? 12 : 0);
-}
-
-int ChatTextWidth(const string& text)
-{
-    int width = 0;
-    for (unsigned char c : text) width += ChatCharacterWidth(c);
-    return width;
-}
+#include "FontMetrics.h"
 
 string FitChatText(string text, int pixels)
 {
     int width = ChatTextWidth(text);
     if (width <= pixels) return text;
-    if (pixels < 36) return string();
-    while (!text.empty() && width + 36 > pixels) {
+    const int dots = ChatTextWidth("...");
+    if (pixels < dots) return string();
+    while (!text.empty() && width + dots > pixels) {
         width -= ChatCharacterWidth(text.back());
         text.pop_back();
     }
@@ -59,14 +46,14 @@ vec2i drawstring(const char* text = "Error", vec3f pos = { 0, 0, 0 }, vec3f colo
                 if (shadow) glBitmap(0, 0, 0.f, 0.f, 1.f, -1.f, NULL);
                 continue;
             }
-            float advance = 0.f;
-            const unsigned char* glyph = Glyphs[0];
-            if (*c >= 33 && *c <= 127) { advance = 12.f; glyph = Glyphs[*c - 32]; }
-            else if (*c == ' ') advance = 6.f;
-            else if (*c == '\t') advance = 18.f;
+            const auto& metric=ChatGlyph(*c);
+            const int advance=metric.advance;
+            const unsigned char* glyph=serif[*c>=33 && *c<=127 ? *c-32 : 0];
             if (advance > 0.f)
             {
-                glBitmap(16, 16, 0.f, 0.f, advance, 0.f, glyph);
+                // Trim source padding; keep one blank pixel on each side.
+                const int padding=metric.width?(advance-metric.width)/2:0;
+                glBitmap(16, 16, (float)(metric.left-padding), 0.f, (float)advance, 0.f, glyph);
                 width += (int)advance;
             }
         }
@@ -75,5 +62,3 @@ vec2i drawstring(const char* text = "Error", vec3f pos = { 0, 0, 0 }, vec3f colo
     }
     return size;
 }
-#undef Glyphs
-
