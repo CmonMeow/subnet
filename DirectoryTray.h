@@ -11,6 +11,7 @@ class DirectoryTray {
     std::atomic<bool> stopped{false};
     NOTIFYICONDATAW icon={};
     UINT taskbarCreated=0;
+    std::atomic<DWORD> startupError{0};
     void addIcon() {
         if(Shell_NotifyIconW(NIM_ADD,&icon)){
             icon.uVersion=NOTIFYICON_VERSION_4;Shell_NotifyIconW(NIM_SETVERSION,&icon);
@@ -57,12 +58,14 @@ class DirectoryTray {
         self.taskbarCreated=RegisterWindowMessageW(L"TaskbarCreated");
         if(RegisterClassW(&wc)){
             HWND hwnd=CreateWindowExW(WS_EX_TOOLWINDOW,wc.lpszClassName,L"subnet directory",WS_POPUP,0,0,0,0,nullptr,nullptr,instance,&self);
+            if(!hwnd)self.startupError=GetLastError();
             self.window=hwnd;
             if(hwnd){
                 self.icon.hWnd=hwnd;
                 self.addIcon();
             }
         }
+        if(!self.window && !self.startupError)self.startupError=GetLastError();
         SetEvent(self.ready);
         if(self.window){MSG message;while(GetMessageW(&message,nullptr,0,0)>0){TranslateMessage(&message);DispatchMessageW(&message);}}
         // Also remove the icon if the message loop ends without WM_CLOSE.
@@ -76,11 +79,12 @@ public:
         icon.cbSize=sizeof(icon);icon.uID=1;icon.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP|NIF_SHOWTIP;icon.uCallbackMessage=WM_APP+1;
         icon.hIcon=LoadIconW(GetModuleHandleW(nullptr),MAKEINTRESOURCEW(1));
         swprintf_s(icon.szTip,L"subnet directory | Port %u | Updates %s",port,updates?L"available":L"unavailable");
-        ready=CreateEventW(nullptr,TRUE,FALSE,nullptr);if(!ready)return false;
-        thread=CreateThread(nullptr,0,run,this,0,nullptr);if(!thread)return false;
+        ready=CreateEventW(nullptr,TRUE,FALSE,nullptr);if(!ready){startupError=GetLastError();return false;}
+        thread=CreateThread(nullptr,0,run,this,0,nullptr);if(!thread){startupError=GetLastError();return false;}
         WaitForSingleObject(ready,INFINITE);
         return window.load()!=nullptr;
     }
+    DWORD error() const {return startupError.load();}
     bool exiting() const {return stopped.load();}
     ~DirectoryTray(){
         if(thread){if(HWND hwnd=window.load())PostMessageW(hwnd,WM_CLOSE,0,0);WaitForSingleObject(thread,INFINITE);CloseHandle(thread);}

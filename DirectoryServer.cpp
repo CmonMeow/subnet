@@ -13,6 +13,17 @@ struct Listing { Entry entry; sockaddr_in owner; Packet registration; ULONGLONG 
 struct Pending { Packet packet; sockaddr_in owner,game; ULONGLONG expires,lastProbe; };
 struct Budget { ULONGLONG start=0;unsigned packets=0; };
 static std::atomic<bool> stopping{false};
+static std::wstring directoryError;
+static int failDirectory(const wchar_t* operation,DWORD code=0) {
+    directoryError=operation;
+    if(code){
+        wchar_t detail[512]={};
+        FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM|FORMAT_MESSAGE_IGNORE_INSERTS,nullptr,code,0,detail,512,nullptr);
+        directoryError+=L"\n\nWindows error "+std::to_wstring(code)+L": "+detail;
+    }
+    fwprintf(stderr,L"%ls\n",directoryError.c_str());
+    return 2;
+}
 static BOOL WINAPI consoleControl(DWORD event) {
     if(event==CTRL_C_EVENT || event==CTRL_BREAK_EVENT || event==CTRL_CLOSE_EVENT){stopping=true;return TRUE;}
     return FALSE;
@@ -22,38 +33,43 @@ static int runDirectory(int argc,wchar_t** argv,bool console) {
     for(int i=1;i<argc;++i){
         std::wstring arg=argv[i];
         if(arg==L"--console"){}
-        else if(arg==L"--port"&&i+1<argc){wchar_t* end=nullptr;unsigned long n=wcstoul(argv[++i],&end,10);if(!end||*end||n<1||n>65535)return 2;port=(unsigned)n;}
-        else if(arg==L"--bind"&&i+1<argc){std::wstring value=argv[++i];bindAddress.clear();for(wchar_t c:value){if(c>127)return 2;bindAddress.push_back(static_cast<char>(c));}}
-        else {fwprintf(stderr,L"Usage: subnet-directory [--console] [--bind IPv4] [--port 778]\n");return 2;}
+        else if(arg==L"--port"&&i+1<argc){wchar_t* end=nullptr;unsigned long n=wcstoul(argv[++i],&end,10);if(!end||*end||n<1||n>65535)return failDirectory(L"Invalid --port. Use a number from 1 to 65535.");port=(unsigned)n;}
+        else if(arg==L"--bind"&&i+1<argc){std::wstring value=argv[++i];bindAddress.clear();for(wchar_t c:value){if(c>127)return failDirectory(L"Invalid --bind IPv4 address.");bindAddress.push_back(static_cast<char>(c));}}
+        else {return failDirectory(L"Invalid command-line arguments.\nUsage: subnet-directory [--console] [--bind IPv4] [--port 778]");}
     }
-    if(sodium_init()<0)return 2;
+    if(sodium_init()<0)return failDirectory(L"Could not initialize directory cryptography.");
     unsigned char key[crypto_sign_SECRETKEYBYTES]={};
     struct ClearKey {unsigned char* key;~ClearKey(){sodium_memzero(key,crypto_sign_SECRETKEYBYTES);}} clearKey{key};
     const auto module=GetModuleHandleW(nullptr);
     const auto resource=FindResourceW(module,MAKEINTRESOURCEW(101),MAKEINTRESOURCEW(10));
     const void* identity=resource?LockResource(LoadResource(module,resource)):nullptr;
     if(!identity || SizeofResource(module,resource)!=sizeof(key)){
-        fprintf(stderr,"Embedded directory identity is missing or invalid. Rebuild the directory.\n");return 2;
+        return failDirectory(L"Embedded directory identity is missing or invalid. Rebuild the directory.");
     }
     memcpy(key,identity,sizeof(key));
     unsigned char loadedPublicKey[crypto_sign_PUBLICKEYBYTES];crypto_sign_ed25519_sk_to_pk(loadedPublicKey,key);
-    if(sodium_memcmp(loadedPublicKey,publicKey(),sizeof(loadedPublicKey))!=0){fprintf(stderr,"Directory key does not match this release. Rebuild the directory with the original identity.\n");sodium_memzero(key,sizeof(key));return 2;}
-    WSADATA wsa;if(WSAStartup(MAKEWORD(2,2),&wsa))return 2;
+    if(sodium_memcmp(loadedPublicKey,publicKey(),sizeof(loadedPublicKey))!=0){return failDirectory(L"Directory key does not match this release. Rebuild the directory with the original identity.");}
+    WSADATA wsa;const int startup=WSAStartup(MAKEWORD(2,2),&wsa);if(startup)return failDirectory(L"Could not initialize Windows networking.",startup);
     struct Winsock {~Winsock(){WSACleanup();}} winsock;
-    SOCKET socket=::socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);if(socket==INVALID_SOCKET)return 2;
+    SOCKET socket=::socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);if(socket==INVALID_SOCKET)return failDirectory(L"Could not create the directory UDP socket.",WSAGetLastError());
     struct Socket {SOCKET socket;~Socket(){closesocket(socket);}} closeSocket{socket};
     BOOL exclusive=TRUE;
-    if(setsockopt(socket,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,reinterpret_cast<const char*>(&exclusive),sizeof(exclusive)))return 2;
+    if(setsockopt(socket,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,reinterpret_cast<const char*>(&exclusive),sizeof(exclusive)))return failDirectory(L"Could not reserve exclusive use of the directory socket.",WSAGetLastError());
     sockaddr_in local={};local.sin_family=AF_INET;local.sin_port=htons((u_short)port);
-    if(inet_pton(AF_INET,bindAddress.c_str(),&local.sin_addr)!=1 || bind(socket,reinterpret_cast<sockaddr*>(&local),sizeof(local))==SOCKET_ERROR){fprintf(stderr,"Cannot bind directory socket: %d\n",WSAGetLastError());return 2;}
+    if(inet_pton(AF_INET,bindAddress.c_str(),&local.sin_addr)!=1)return failDirectory(L"Invalid --bind IPv4 address.");
+    if(bind(socket,reinterpret_cast<sockaddr*>(&local),sizeof(local))==SOCKET_ERROR){
+        const DWORD code=WSAGetLastError();
+        const std::wstring operation=L"Could not bind directory UDP port "+std::to_wstring(port)+L" on "+std::wstring(bindAddress.begin(),bindAddress.end())+L".";
+        return failDirectory(operation.c_str(),code);
+    }
     u_long nonblocking=1;
-    if(ioctlsocket(socket,FIONBIO,&nonblocking)==SOCKET_ERROR){fprintf(stderr,"Cannot make directory socket nonblocking: %d\n",WSAGetLastError());return 2;}
+    if(ioctlsocket(socket,FIONBIO,&nonblocking)==SOCKET_ERROR){return failDirectory(L"Could not make the directory socket nonblocking.",WSAGetLastError());}
     UpdateServer updates;
     const bool servingUpdates=updates.start(local,Updates::folder(Updates::executable()));
     if(servingUpdates)puts("Signed updates available on the directory TCP port.");
     else puts("Updates disabled: no matching signed subnet.exe/subnet.update, or TCP bind failed.");
     DirectoryTray tray;
-    if(!console && !tray.start(port,servingUpdates))return 2;
+    if(!console && !tray.start(port,servingUpdates))return failDirectory(L"Could not create the directory tray window.",tray.error());
     unsigned char cookieKey[32];randombytes_buf(cookieKey,sizeof(cookieKey));
     auto cookie=[&](const sockaddr_in& from,const Packet& p,ULONGLONG bucket,unsigned char* out){
         unsigned char input[30]={};memcpy(input,&from.sin_addr.s_addr,4);memcpy(input+4,&from.sin_port,2);memcpy(input+6,p.nonce,16);memcpy(input+22,&bucket,8);
@@ -69,7 +85,7 @@ static int runDirectory(int argc,wchar_t** argv,bool console) {
     printf("Directory listening on %s UDP %u. Listings expire after 90 seconds. Ctrl+C stops it.\n",bindAddress.c_str(),port);fflush(stdout);
     while(!stopping && !tray.exiting()){
         fd_set reads;FD_ZERO(&reads);FD_SET(socket,&reads);updates.watch(reads);timeval wait={0,updates.pollMicros()};
-        if(select(0,&reads,nullptr,nullptr,&wait)==SOCKET_ERROR){fprintf(stderr,"Directory wait failed: %d\n",WSAGetLastError());return 2;}
+        if(select(0,&reads,nullptr,nullptr,&wait)==SOCKET_ERROR){return failDirectory(L"Directory network wait failed.",WSAGetLastError());}
         updates.tick();
         auto now=GetTickCount64();
         if(now>=nextCleanup){
@@ -148,7 +164,7 @@ static int runDirectory(int argc,wchar_t** argv,bool console) {
 }
 
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
-    int argc=0;wchar_t** argv=CommandLineToArgvW(GetCommandLineW(),&argc);if(!argv)return 2;
+    int argc=0;wchar_t** argv=CommandLineToArgvW(GetCommandLineW(),&argc);if(!argv){failDirectory(L"Could not read command-line arguments.",GetLastError());MessageBoxW(nullptr,directoryError.c_str(),L"subnet directory",MB_OK|MB_ICONERROR);return 2;}
     bool console=false;for(int i=1;i<argc;++i)if(wcscmp(argv[i],L"--console")==0)console=true;
     if(console){
         const bool output=GetFileType(GetStdHandle(STD_OUTPUT_HANDLE))!=FILE_TYPE_UNKNOWN;
@@ -160,6 +176,6 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
         SetConsoleCtrlHandler(consoleControl,TRUE);
     }
     const int result=runDirectory(argc,argv,console);LocalFree(argv);
-    if(result && !console)MessageBoxW(nullptr,L"The directory could not start or continue running. Use --console to see the exact error. The identity is built in; another running directory may already be using its port.",L"subnet directory",MB_OK|MB_ICONERROR);
+    if(result && !console)MessageBoxW(nullptr,directoryError.c_str(),L"subnet directory",MB_OK|MB_ICONERROR);
     return result;
 }
