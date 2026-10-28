@@ -200,7 +200,6 @@ class cNetworkRuntime
     vector<string> _bannedSerials;
     std::map<__int32, NetworkIdentity> _playerIdentities;
     std::map<__int32, string> _privateChatKeys;
-    std::map<__int32, string> _privateChatNames;
     std::map<__int32, string> _pendingLeaveMessages;
     cCryptoSession _clientCrypto;
     std::map<__int32, cCryptoSession> _serverCrypto;
@@ -241,7 +240,6 @@ class cNetworkRuntime
         }
         _privateChatKeyReady = true;
         _privateChatKeys[0] = privateChatPublicKeyBytes();
-        _privateChatNames[0] = _hostName;
         return true;
     }
 
@@ -284,19 +282,17 @@ class cNetworkRuntime
 
     void broadcastChatKey(__int32 player, const string& name, const string& publicKey)
     {
-        for (size_t i = 0; i < _players.size(); ++i)
-        {
-            sendChatKeyTo(_players[i], player, name, publicKey);
-        }
+        NetPacket raw;
+        encodeChatKey(raw, player, name, publicKey);
+        const string payload = BuildAppRawMessage(NAMTChatKey, raw);
+        for (auto recipient : _players)
+            sendPayloadFromServer(recipient, payload, DeliveryGuaranteed | DeliveryHighPriority);
     }
 
     void sendKnownChatKeysTo(__int32 to)
     {
-        for (std::map<__int32, string>::const_iterator i = _privateChatKeys.begin(); i != _privateChatKeys.end(); ++i)
-        {
-            std::map<__int32, string>::const_iterator name = _privateChatNames.find(i->first);
-            sendChatKeyTo(to, i->first, name != _privateChatNames.end() ? name->second : playerDisplayName(i->first), i->second);
-        }
+        for (const auto& key : _privateChatKeys)
+            sendChatKeyTo(to, key.first, playerDisplayName(key.first), key.second);
     }
 
     bool encryptPrivateText(__int32 target, const string& message, string& cipher)
@@ -725,7 +721,7 @@ class cNetworkRuntime
             _playerIdentities.swap(roster);
             _participantsDirty = true;
             for (auto it = _privateChatKeys.begin(); it != _privateChatKeys.end();)
-                if (!_playerIdentities.count(it->first)) { _screens.peerLeft(it->first); _files.peerLeft(it->first); clearFileRelay(it->first); _privateChatNames.erase(it->first); it = _privateChatKeys.erase(it); }
+                if (!_playerIdentities.count(it->first)) { _screens.peerLeft(it->first); _files.peerLeft(it->first); clearFileRelay(it->first); it = _privateChatKeys.erase(it); }
                 else ++it;
             return;
         }
@@ -748,7 +744,6 @@ class cNetworkRuntime
             if (keyPlayer >= 0 && (_privateChatKeys.count(keyPlayer) || _privateChatKeys.size()<256))
             {
                 _privateChatKeys[keyPlayer] = publicKey;
-                _privateChatNames[keyPlayer] = keyName;
             }
             return;
         }
@@ -894,7 +889,6 @@ class cNetworkRuntime
         if (decodeChatKey(message, messageSize, keyPlayer, keyName, publicKey))
         {
             _privateChatKeys[from] = publicKey;
-            _privateChatNames[from] = playerDisplayName(from);
             broadcastChatKey(from, playerDisplayName(from), publicKey);
             return;
         }
@@ -1017,7 +1011,6 @@ class cNetworkRuntime
         _pendingHistory.erase(player);
         _historyPeers.erase(player);
         _privateChatKeys.erase(player);
-        _privateChatNames.erase(player);
         _serverCrypto.erase(player);
         broadcastPresence();
     }
@@ -1388,7 +1381,6 @@ class cNetworkRuntime
             string oldName = displayName;
             displayName = IdentityDisplayName(name, from);
             broadcastPresence();
-            _privateChatNames[from] = displayName;
             std::map<__int32, string>::const_iterator key = _privateChatKeys.find(from);
             if (key != _privateChatKeys.end()) broadcastChatKey(from, displayName, key->second);
             string notice = "system: " + oldName + " is now " + displayName;
@@ -1598,7 +1590,6 @@ public:
         _participantsDirty = true;
         _rosterRevision = 0;
         _privateChatKeys.clear();
-        _privateChatNames.clear();
         _pendingLeaveMessages.clear();
         _serverCrypto.clear();
         _clientCrypto.clear();_resumeHello.clear();
@@ -2080,7 +2071,6 @@ private:
         _participantsDirty = true;
         _rosterRevision = 0;
         _privateChatKeys.clear();
-        _privateChatNames.clear();
         _pendingLeaveMessages.clear();
         _serverCrypto.clear();
         _clientCrypto.clear();_resumeHello.clear();
