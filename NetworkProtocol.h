@@ -670,6 +670,8 @@ public:
     }
 
     ~cCryptoSession() { clear(); }
+    cCryptoSession(const cCryptoSession&)=delete;
+    cCryptoSession& operator=(const cCryptoSession&)=delete;
 
     bool ready() const { return _ready; }
     const unsigned char* receiveKey() const { return _rx; }
@@ -719,6 +721,8 @@ public:
 
     bool acceptClientHello(const string& payload, string& response)
     {
+        response.clear();
+        if(_ready)return false;
         clear();
         if (payload.size() != crypto_kx_PUBLICKEYBYTES)
         {
@@ -742,8 +746,10 @@ public:
 
     bool encrypt(const string& plain, string& payload)
     {
-        if (!_ready || _sendSequence == UINT64_MAX)
+        if (!_ready || _sendSequence == UINT64_MAX ||
+            plain.size()>NET_MAX_ENCRYPTED_BYTES-sizeof(ChatPacketPrefix)-crypto_aead_xchacha20poly1305_ietf_NPUBBYTES-crypto_aead_xchacha20poly1305_ietf_ABYTES)
         {
+            payload.clear();
             return false;
         }
         unsigned char nonce[crypto_aead_xchacha20poly1305_ietf_NPUBBYTES];
@@ -773,6 +779,7 @@ public:
 
     bool decrypt(const char* buffer, __int32 bufferSize, string& plain)
     {
+        plain.clear();
         if (!_ready || !buffer ||
             bufferSize < (__int32)(sizeof(ChatPacketPrefix) + crypto_aead_xchacha20poly1305_ietf_NPUBBYTES + crypto_aead_xchacha20poly1305_ietf_ABYTES) ||
             (size_t)bufferSize > NET_MAX_ENCRYPTED_BYTES)

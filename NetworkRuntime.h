@@ -745,7 +745,7 @@ class cNetworkRuntime
         string publicKey;
         if (decodeChatKey(message, messageSize, keyPlayer, keyName, publicKey))
         {
-            if (keyPlayer >= 0)
+            if (keyPlayer >= 0 && (_privateChatKeys.count(keyPlayer) || _privateChatKeys.size()<256))
             {
                 _privateChatKeys[keyPlayer] = publicKey;
                 _privateChatNames[keyPlayer] = keyName;
@@ -1082,20 +1082,18 @@ class cNetworkRuntime
         }
     }
 
-    bool sendRawFromClient(ChatPacketKind type, const NetPacket& raw, DeliveryOptions flags)
+    bool sendPayloadFromClient(const string& payload, DeliveryOptions flags)
     {
-        if (!_client)
-        {
-            return false;
-        }
-        string payload = BuildAppRawMessage(type, raw);
+        if (!_client)return false;
         string encrypted;
-        if (!_clientCrypto.encrypt(payload, encrypted))
-        {
-            return false;
-        }
+        if (!_clientCrypto.encrypt(payload, encrypted))return false;
         DWORD msgID = 0;
         return (bool)_client->SendPayload((BYTE*)encrypted.data(), (__int32)encrypted.size(), msgID, flags, IntrusivePtr<PacketBuffer>());
+    }
+
+    bool sendRawFromClient(ChatPacketKind type, const NetPacket& raw, DeliveryOptions flags)
+    {
+        return sendPayloadFromClient(BuildAppRawMessage(type, raw),flags);
     }
 
     bool sendRawFromServer(__int32 player, ChatPacketKind type, const NetPacket& raw, DeliveryOptions flags)
@@ -1135,10 +1133,11 @@ class cNetworkRuntime
 
     void sendRawStringFromServerToAll(ChatPacketKind type, const string& message, size_t maxLength)
     {
-        for (size_t i = 0; i < _players.size(); ++i)
-        {
-            sendRawStringFromServer(_players[i], type, message, maxLength);
-        }
+        NetPacket raw;
+        raw.putLongString(message, maxLength);
+        const string payload = BuildAppRawMessage(type, raw);
+        for (auto player : _players)
+            sendPayloadFromServer(player, payload, DeliveryGuaranteed | DeliveryHighPriority);
     }
 
     void sendRawControlFromClient(ChatPacketKind type)
@@ -1173,48 +1172,15 @@ class cNetworkRuntime
 
     void sendVoicePayloadFromClient(const NetworkVoicePacket& packet)
     {
-        if (!_client)
-        {
-            return;
-        }
-        string payload = BuildVoicePayload(packet);
-        string encrypted;
-        if (!_clientCrypto.encrypt(payload, encrypted))
-        {
-            return;
-        }
-        payload = encrypted;
-        DWORD msgID = 0;
-        _client->SendPayload((BYTE*)payload.data(), (__int32)payload.size(), msgID, DeliveryNone, IntrusivePtr<PacketBuffer>());
-    }
-
-    void sendVoicePayloadFromServer(__int32 player, const NetworkVoicePacket& packet)
-    {
-        if (!_server)
-        {
-            return;
-        }
-        string payload = BuildVoicePayload(packet);
-        std::map<__int32, cCryptoSession>::iterator found = _serverCrypto.find(player);
-        string encrypted;
-        if (found == _serverCrypto.end() || !found->second.encrypt(payload, encrypted))
-        {
-            return;
-        }
-        payload = encrypted;
-        DWORD msgID = 0;
-        _server->SendPayload(player, (BYTE*)payload.data(), (__int32)payload.size(), msgID, DeliveryNone, IntrusivePtr<PacketBuffer>());
+        sendPayloadFromClient(BuildVoicePayload(packet),DeliveryNone);
     }
 
     void broadcastVoicePacket(const NetworkVoicePacket& packet, __int32 exceptPlayer)
     {
-        for (size_t i = 0; i < _players.size(); ++i)
-        {
-            if (_players[i] != exceptPlayer)
-            {
-                sendVoicePayloadFromServer(_players[i], packet);
-            }
-        }
+        const string payload = BuildVoicePayload(packet);
+        for (auto player : _players)
+            if (player != exceptPlayer)
+                sendPayloadFromServer(player, payload, DeliveryNone);
     }
 
     string playerDisplayName(__int32 player) const
