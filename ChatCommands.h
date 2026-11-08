@@ -1,6 +1,6 @@
 #pragma once
 
-enum class ChatCommand { Name, Hostname, Dedicated, Connect, Clear, Leave, Users, Private, Kick, Ban, Unknown };
+enum class ChatCommand { Name, Hostname, Dedicated, Connect, Clear, Mute, Leave, Users, Private, Kick, Ban, Unknown };
 struct ChatCommandEntry { const char* name; ChatCommand id; const char* help; bool hostOnly; };
 static constexpr ChatCommandEntry CHAT_COMMANDS[] = {
     {"/name", ChatCommand::Name, "/name username - change your name", false},
@@ -8,6 +8,7 @@ static constexpr ChatCommandEntry CHAT_COMMANDS[] = {
     {"/dedicated", ChatCommand::Dedicated, "/dedicated [on|off] - host at startup", false},
     {"/connect", ChatCommand::Connect, "/connect [address] - connect", false},
     {"/clear", ChatCommand::Clear, "/clear - clear chat", false},
+    {"/mute", ChatCommand::Mute, "/mute - mute incoming and outgoing voice", false},
     {"/leave", ChatCommand::Leave, "/leave - leave or stop hosting", false},
     {"/users", ChatCommand::Users, "/users - list connected users", false},
     {"/pm", ChatCommand::Private, "/pm name|netId message - private message", false},

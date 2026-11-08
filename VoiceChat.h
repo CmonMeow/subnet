@@ -34,6 +34,7 @@ class cVoiceChat
     bool _recording;
     bool _transmitEnabled;
     bool _buttonTransmitEnabled = false;
+    bool _muted = false;
     unsigned __int64 _lastVoiceSent = 0;
     bool _captureFailed = false;
     bool _playbackReady;
@@ -246,6 +247,13 @@ public:
         }
     }
 
+    bool muted() const { return _muted; }
+    void mute() {
+        if (_muted) return;
+        _muted = true;
+        resetTransmitMode();
+        cleanupPlaybackBuffers(true);
+    }
     bool micLatched() const {return _buttonTransmitEnabled;}
     void restoreMicLatch(bool enabled){_buttonTransmitEnabled=enabled;}
     bool micEnabled() const { return _transmitEnabled && _recording; }
@@ -269,10 +277,13 @@ public:
             _mixer.setVolume(person.first,settings.userVolume(person.second));
         _networkWasActive = networkActive;
         if (!talkKeyDown) _captureFailed = false;
-        if (micClicked) _buttonTransmitEnabled = !_buttonTransmitEnabled;
+        if (micClicked) {
+            if (_muted) _muted = false;
+            else _buttonTransmitEnabled = !_buttonTransmitEnabled;
+        }
         // PTT takes over from a latched mic; releasing the key must mute it.
-        if (talkKeyDown) _buttonTransmitEnabled = false;
-        _transmitEnabled = _buttonTransmitEnabled || talkKeyDown;
+        if (!_muted && talkKeyDown) _buttonTransmitEnabled = false;
+        _transmitEnabled = !_muted && (_buttonTransmitEnabled || talkKeyDown);
 
         if (_transmitEnabled)
         {
@@ -284,7 +295,7 @@ public:
         }
 
         NetworkVoicePacket packet;
-        while (network.consumeVoicePacket(packet)) playPacket(packet);
+        while (network.consumeVoicePacket(packet)) if (!_muted) playPacket(packet);
         servicePlayback();
         collectCapture(talkKeyDown);
         while (popCapturedPacket(packet))

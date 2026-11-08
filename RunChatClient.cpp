@@ -264,6 +264,10 @@ void RunChatClient(HWND hWnd)
     HostBrowser browser;
     cChatBox chatBox;chatBox.restoreDraft(resumeDraft);
     cVoiceChat voiceChat;voiceChat.restoreMicLatch(resumeMic);
+    chatBox.muteVoice = [&] {
+        voiceChat.mute();
+        network.showNotice("Voice muted. Click UNMUTE to restore.", false);
+    };
     MessageChimeCooldown chimeCooldown;
     std::function<void(bool)> appFocusChanged = [&](bool active) {
         chimeCooldown.focusChanged(active);
@@ -438,7 +442,7 @@ void RunChatClient(HWND hWnd)
             chatBox.draw(network, GetForegroundWindow() == hWnd, !browser.shown(network));
             DrawChatStatus(MakeChatStatus(network, voiceChat, participantOrder), userVolumes, chatBox.historyOffset(), !browser.shown(network),nameRows,network.isHost());
             browser.draw(network,directory);
-            DrawChatButton(voiceChat.micEnabled() ? "MIC ON" : "MIC OFF",
+            DrawChatButton(voiceChat.muted() ? "UNMUTE" : voiceChat.micEnabled() ? "MIC ON" : "MIC OFF",
                                         micButton, voiceChat.micEnabled(), voiceChat.transmitting(network));
             DrawChatButton(selectingHotkey ? "PRESS KEY" : settings.talkKeyLabel().c_str(), hotkeyButton, selectingHotkey);
             DrawChatButton(!network.hasConnection() ? "HOST" : screenShare.watching() ? "STOP WATCH" : screenShare.sharing() ? "STOP SHARE" : "SCREEN",screenButton,screenShare.sharing() || screenShare.watching());
@@ -482,6 +486,12 @@ void RunChatClient(HWND hWnd)
                         SetFocus(hWnd);
                     }
                 }
+                continue;
+            }
+            if (msg.hwnd == hWnd && msg.message == WM_RBUTTONUP) {
+                POINT mouse = { (short)LOWORD(msg.lParam), (short)HIWORD(msg.lParam) };
+                input.mouse.x = mouse.x; input.mouse.y = mouse.y;
+                if (!browser.shown(network)) chatBox.showCopyMenu(hWnd, network);
                 continue;
             }
             if (msg.hwnd == hWnd && msg.message == WM_DROPFILES)

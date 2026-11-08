@@ -74,9 +74,6 @@
   </ItemDefinitionGroup>
   <Import Project="third_party\aec3\sources.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <Target Name="SignPrivateRelease" AfterTargets="Build" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <Exec Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(ProjectDir)SignRelease.ps1&quot; -Executable &quot;$(TargetPath)&quot;" />
-  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
   <ItemGroup>

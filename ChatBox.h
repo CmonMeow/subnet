@@ -1,6 +1,7 @@
 #pragma once
 
 #include <shellapi.h>
+#include <functional>
 #include "ChatSelection.h"
 #include "ChatInputLayout.h"
 
@@ -86,8 +87,8 @@ class cChatBox
             QueueChatText(text,x+8,y+4,.94f,.94f,.94f);break;
         }
     }
-    void copySelection(const cNetworkRuntime& network) {
-        const auto text=_selection.text(network.chatLines(),
+    string selectedText(const cNetworkRuntime& network) const {
+        return _selection.text(network.chatLines(),
             [&](const NetworkChatLine& line){return historyText(network,line);},
             [](const NetworkChatLine& previous,const NetworkChatLine& line){
                 if(previous.message && previous.message==line.message) {
@@ -96,6 +97,9 @@ class cChatBox
                 }
                 return string("\r\n");
             });
+    }
+    void copySelection(const cNetworkRuntime& network) { copyText(selectedText(network)); }
+    static void copyText(const string& text) {
         if(text.empty())return;
         int count=MultiByteToWideChar(CP_UTF8,0,text.data(),(int)text.size(),nullptr,0);
         if(count<=0)return;
@@ -519,6 +523,11 @@ class cChatBox
             break;
         }
 
+        case ChatCommand::Mute:
+            if (Trim(command.substr(5)).empty()) { if (muteVoice) muteVoice(); }
+            else network.showNotice("usage: /mute", true);
+            break;
+
         case ChatCommand::Clear:
             network.clearChat();
             break;
@@ -581,6 +590,26 @@ class cChatBox
     }
 
 public:
+    std::function<void()> muteVoice;
+    void showCopyMenu(HWND window, cNetworkRuntime& network) {
+        ChatSelection::Point point;
+        if (!historyPoint(network, point)) return;
+        string text = selectedText(network);
+        if (text.empty()) for (const auto& line : network.chatLines())
+            if (line.historyId == point.first) {
+                text = line.message ? *line.message : historyText(network,line);
+                break;
+            }
+        if (text.empty()) return;
+        HMENU menu = CreatePopupMenu();
+        if (!menu) return;
+        AppendMenuA(menu, MF_STRING, 1, "Copy");
+        POINT mouse; GetCursorPos(&mouse);
+        const UINT selected = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+            mouse.x, mouse.y, window, nullptr);
+        DestroyMenu(menu);
+        if (selected == 1) copyText(text);
+    }
     void nameRows(int rows) { _nameRows=rows; }
     bool linkHovered(cNetworkRuntime& network) { return openLinkUnderMouse(network,false); }
     const string& draft() const {return _draft;}
